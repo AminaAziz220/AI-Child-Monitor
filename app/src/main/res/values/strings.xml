@@ -1,3 +1,6 @@
 <resources>
     <string name="app_name">AI Child Monitor</string>
+    <string name="accessibility_service_description">
+        YouTube Monitor Service\n\nMonitors YouTube content for child safety using AI classification.
+    </string>
 </resources>

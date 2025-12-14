@@ -4,6 +4,7 @@ import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Color
 import android.os.Bundle
 import android.provider.Settings
@@ -23,6 +24,7 @@ import com.google.firebase.auth.ktx.auth
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
 import com.sigmacoders.aichildmonitor.databinding.ActivityMainBinding
+import com.sigmacoders.aichildmonitor.ai.VideoClassifier
 import java.util.Calendar
 
 class MainActivity : AppCompatActivity() {
@@ -31,11 +33,14 @@ class MainActivity : AppCompatActivity() {
     private val TAG = "MainActivity"
     private val childrenList = mutableListOf<Pair<String, String>>() // Pair of (Child ID, Child Name)
     private lateinit var childrenAdapter: ArrayAdapter<String>
+    private lateinit var sharedPrefs: SharedPreferences
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        sharedPrefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
 
         val auth = Firebase.auth
         val userId = auth.currentUser?.uid
@@ -66,6 +71,12 @@ class MainActivity : AppCompatActivity() {
         binding.childSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>, view: View?, position: Int, id: Long) {
                 val selectedChildId = childrenList[position].first
+                // Save the selected child's info for the service to use
+                with(sharedPrefs.edit()) {
+                    putString("current_user_id", userId)
+                    putString("current_child_id", selectedChildId)
+                    apply()
+                }
                 setupFirestoreListener(userId, selectedChildId)
             }
             override fun onNothingSelected(parent: AdapterView<*>) {}
