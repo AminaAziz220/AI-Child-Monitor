@@ -6,23 +6,15 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
+
 
 class VideoClassifier {
 
     private val client = OkHttpClient()
     private val db = FirebaseFirestore.getInstance()
-
-    private val candidateLabels = listOf(
-        "educational",
-        "entertainment",
-        "gaming",
-        "violent",
-        "adult",
-        "harmful",
-        "safe"
-    )
 
     fun classify(
         title: String,
@@ -33,51 +25,67 @@ class VideoClassifier {
         onComplete: (String, Double, String) -> Unit,
         onError: (Exception) -> Unit
     ) {
-        val text = "$title Channel: $channel"
+        val text = "$title. Channel: $channel"
 
-        val payload = JSONObject().apply {
+        val candidateLabels = listOf(
+            "educational",
+            "entertainment",
+            "gaming",
+            "violent",
+            "adult",
+            "harmful",
+            "safe"
+        )
+
+        // Create the JSON payload for the API request
+        val json = JSONObject().apply {
             put("inputs", text)
             put("parameters", JSONObject().apply {
-                put("candidate_labels", JSONArray(candidateLabels))
+                put("candidate_labels", candidateLabels)
+            })
+            // Add an option to wait for the model to be ready
+            put("options", JSONObject().apply {
+                put("wait_for_model", true)
             })
         }
 
-        val body = payload.toString().toRequestBody("application/json".toMediaTypeOrNull())
+        val requestBody = json.toString()
+            .toRequestBody("application/json".toMediaTypeOrNull())
 
         val request = Request.Builder()
             .url("https://router.huggingface.co/hf-inference/models/facebook/bart-large-mnli")
             .addHeader("Authorization", "Bearer $apiKey")
             .addHeader("Content-Type", "application/json")
-            .post(body)
+            .post(requestBody)
             .build()
+
 
         client.newCall(request).enqueue(object : Callback {
 
             override fun onFailure(call: Call, e: IOException) {
+                // Network failure
                 onError(e)
             }
 
             override fun onResponse(call: Call, response: Response) {
+
+                val body = response.body?.string() ?: ""   // ✅ declare OUTSIDE try
+
                 try {
-                    val raw = response.body?.string() ?: ""
+                    Log.d("HF_RAW", body)
 
-                    Log.d("HF_RAW", raw)
+                    val jsonArray = JSONArray(body)
 
-                    // Handle model loading or rate limits
-                    if (raw.contains("loading", ignoreCase = true)) {
-                        onError(Exception("Model is loading. Try again in a few seconds."))
-                        return
-                    }
+                    val topResult = jsonArray.getJSONObject(0)
+                    val rawLabel = topResult.getString("label")
+                    val confidence = topResult.getDouble("score")
 
-                    // Convert raw JSON to array of label-score pairs
-                    val arr = JSONArray(raw)
+                    val category = rawLabel
+                        .replace("[", "")
+                        .replace("]", "")
+                        .trim()
 
-                    val topLabel = arr.getJSONObject(0).getString("label")
-                    val topScore = arr.getJSONObject(0).getDouble("score")
-
-                    val cleanLabel = topLabel.replace("[", "").replace("]", "")
-
-                    val safety = when (cleanLabel.lowercase()) {
+                    val safety = when (category.lowercase()) {
                         "violent", "adult", "harmful" -> "unsafe"
                         else -> "safe"
                     }
@@ -85,13 +93,12 @@ class VideoClassifier {
                     val data = hashMapOf(
                         "title" to title,
                         "channel" to channel,
-                        "category" to cleanLabel,
-                        "confidence" to topScore,
+                        "category" to category,
+                        "confidence" to confidence,
                         "safety" to safety,
                         "timestamp" to System.currentTimeMillis()
                     )
 
-                    // Save classification result
                     db.collection("users")
                         .document(parentId)
                         .collection("children")
@@ -99,12 +106,47 @@ class VideoClassifier {
                         .collection("videoLogs")
                         .add(data)
 
-                    onComplete(cleanLabel, topScore, safety)
+                    onComplete(category, confidence, safety)
 
                 } catch (e: Exception) {
-                    onError(e)
+                    onError(Exception("Failed to parse JSON. Response was: $body", e))
                 }
             }
+
+
         })
+    }
+
+    private fun saveResultToFirestore(
+        parentId: String,
+        childId: String,
+        title: String,
+        channel: String,
+        category: String,
+        confidence: Double,
+        safety: String
+    ) {
+        val data = hashMapOf(
+            "title" to title,
+            "channel" to channel,
+            "category" to category,
+            "confidence" to confidence,
+            "safety" to safety,
+            "timestamp" to System.currentTimeMillis()
+        )
+
+        db.collection("users")
+            .document(parentId)
+            .collection("children")
+            .document(childId)
+            .collection("videoLogs")
+            .add(data)
+            .addOnSuccessListener {
+                Log.d("FIRESTORE_SUCCESS", "Video log saved successfully.")
+            }
+            .addOnFailureListener { e ->
+                Log.e("FIRESTORE_ERROR", "Error saving video log", e)
+                // You might want to handle this failure case, perhaps with another callback
+            }
     }
 }

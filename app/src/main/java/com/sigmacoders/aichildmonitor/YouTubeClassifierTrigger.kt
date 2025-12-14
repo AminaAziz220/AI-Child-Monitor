@@ -14,33 +14,41 @@ object YouTubeClassifierTrigger {
     fun classifyIfNeeded(
         context: Context,
         title: String,
-        channel: String = "Unknown",
         parentId: String,
-        childId: String,
-        apiKey: String
+        childId: String
     ) {
         if (title == lastClassifiedTitle) return
         lastClassifiedTitle = title
 
-        CoroutineScope(Dispatchers.IO).launch {
-            Log.d("YT_CLASSIFIER", "Classifying video: $title")
+        val apiKeyProvider = ApiKeyProvider()
 
-            VideoClassifier().classify(
-                title = title,
-                channel = channel,
-                parentId = parentId,
-                childId = childId,
-                apiKey = apiKey,
-                onComplete = { category, confidence, safety ->
-                    Log.i(
-                        "YT_CLASSIFIER",
-                        "RESULT → $category | $safety | $confidence"
+        apiKeyProvider.getHuggingFaceKey(
+            onSuccess = { apiKey ->
+
+                CoroutineScope(Dispatchers.IO).launch {
+                    Log.d("YT_CLASSIFIER", "Classifying video: $title")
+
+                    VideoClassifier().classify(
+                        title = title,
+                        channel = "Unknown",
+                        parentId = parentId,
+                        childId = childId,
+                        apiKey = apiKey,
+                        onComplete = { category, confidence, safety ->
+                            Log.i(
+                                "YT_CLASSIFIER",
+                                "RESULT → $category | $safety | $confidence"
+                            )
+                        },
+                        onError = { e ->
+                            Log.e("YT_CLASSIFIER", "Classification failed", e)
+                        }
                     )
-                },
-                onError = { e ->
-                    Log.e("YT_CLASSIFIER", "Classification failed", e)
                 }
-            )
-        }
+            },
+            onFailure = { e ->
+                Log.e("YT_CLASSIFIER", "Failed to fetch API key", e)
+            }
+        )
     }
 }

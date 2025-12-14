@@ -4,6 +4,8 @@ import android.accessibilityservice.AccessibilityService
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.sigmacoders.aichildmonitor.YouTubeClassifierTrigger
+
 
 class YouTubeAccessibilityService : AccessibilityService() {
 
@@ -38,6 +40,15 @@ class YouTubeAccessibilityService : AccessibilityService() {
             Log.d(TAG, "VIDEO TITLE DETECTED: $title")
             Log.d(TAG, "----------------------------------------------------")
             // In the future, you will call your VideoClassifier from here.
+            // Trigger AI classification
+            YouTubeClassifierTrigger.classifyIfNeeded(
+                context = this,
+                title = title.toString(),
+                parentId = "PARENT_ID_HERE",
+                childId = "CHILD_ID_HERE"
+            )
+
+
         }
     }
 
