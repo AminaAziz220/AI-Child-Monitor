@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.os.Process
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.ktx.firestore
@@ -39,7 +40,6 @@ class UsageStatsUploader(private val context: Context) {
     fun uploadUsageStats(parentId: String, childId: String) {
         if (!hasUsageStatsPermission()) {
             Log.w(tag, "Usage stats permission not granted. Cannot upload.")
-            // Optionally, request permission again if the app is opened.
             requestUsageStatsPermission()
             return
         }
@@ -87,10 +87,13 @@ class UsageStatsUploader(private val context: Context) {
             val db = Firebase.firestore
             val childRef = db.collection("users").document(parentId).collection("children").document(childId)
 
-            // Use set with merge to create or update the usage field without overwriting other child data
             childRef.set(hashMapOf("usage" to usageMap), SetOptions.merge())
                 .addOnSuccessListener { Log.d(tag, "Successfully uploaded usage stats for child $childId.") }
-                .addOnFailureListener { e -> Log.e(tag, "Error uploading usage stats", e) }
+                .addOnFailureListener { e ->
+                    Log.e(tag, "Error uploading usage stats", e)
+                    // Make the error visible to the user
+                    Toast.makeText(context, "Failed to upload data: ${e.message}", Toast.LENGTH_LONG).show()
+                }
         }
     }
 
