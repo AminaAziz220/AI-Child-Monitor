@@ -17,7 +17,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AIChildMonitor">
         <activity
-            android:name=".LoginActivity"
+            android:name=".RoleSelectionActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -26,10 +26,19 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".LoginActivity"
+            android:exported="false" />
+        <activity
             android:name=".MainActivity"
             android:exported="false" />
         <activity
             android:name=".SignUpActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ChildLoginActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ChildDashboardActivity"
             android:exported="false" />
     </application>
 

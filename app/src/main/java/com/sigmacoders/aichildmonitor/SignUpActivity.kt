@@ -15,7 +15,7 @@ import com.google.firebase.ktx.Firebase
 class SignUpActivity : AppCompatActivity() {
 
     private lateinit var auth: FirebaseAuth
-    private val TAG = "SignUpActivity"
+    private val tag = "SignUpActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,7 +48,7 @@ class SignUpActivity : AppCompatActivity() {
             auth.createUserWithEmailAndPassword(email, password)
                 .addOnCompleteListener(this) { task ->
                     if (task.isSuccessful) {
-                        Log.d(TAG, "createUserWithEmail:success")
+                        Log.d(tag, "createUserWithEmail:success")
                         val user = auth.currentUser
 
                         // Create a document for the new user in the "users" collection
@@ -61,8 +61,8 @@ class SignUpActivity : AppCompatActivity() {
                         if (user != null) {
                             db.collection("users").document(user.uid)
                                 .set(userProfile)
-                                .addOnSuccessListener { Log.d(TAG, "User profile created!") }
-                                .addOnFailureListener { e -> Log.w(TAG, "Error creating user profile", e) }
+                                .addOnSuccessListener { Log.d(tag, "User profile created!") }
+                                .addOnFailureListener { e -> Log.w(tag, "Error creating user profile", e) }
                         }
 
                         val intent = Intent(this, MainActivity::class.java)
@@ -71,7 +71,7 @@ class SignUpActivity : AppCompatActivity() {
                         finish()
                     } else {
                         // If sign up fails, display a message.
-                        Log.w(TAG, "createUserWithEmail:failure", task.exception)
+                        Log.w(tag, "createUserWithEmail:failure", task.exception)
                         Toast.makeText(baseContext, "Authentication failed.", Toast.LENGTH_SHORT).show()
                     }
                 }
