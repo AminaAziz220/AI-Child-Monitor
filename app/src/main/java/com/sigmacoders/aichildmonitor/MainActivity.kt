@@ -44,6 +44,8 @@ class MainActivity : AppCompatActivity() {
     private fun setupRecyclerView() {
         childrenAdapter = ChildrenAdapter(childrenList) { child ->
             val intent = Intent(this, ChildDashboardActivity::class.java)
+            // Pass both the parent and child ID for an explicit data path
+            intent.putExtra("PARENT_ID", child.parentId)
             intent.putExtra("CHILD_ID", child.id)
             startActivity(intent)
         }
@@ -67,13 +69,12 @@ class MainActivity : AppCompatActivity() {
         val pairingKey = (1000..9999).random().toString()
         val db = Firebase.firestore
 
-        // Create a temporary document in a public collection for pairing
         val pairingRef = db.collection("pairingKeys").document(pairingKey)
         val pairingData = hashMapOf("parentId" to userId)
 
         pairingRef.set(pairingData)
             .addOnSuccessListener {
-                Log.d(tag, "Pairing key created in public collection: $pairingKey")
+                Log.d(tag, "Pairing key created: $pairingKey")
                 showPairingKeyDialog(pairingKey)
             }
             .addOnFailureListener { e ->
@@ -101,11 +102,13 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 childrenList.clear()
-                snapshots?.let {
-                    for (doc in it) {
-                        val child = doc.toObject<Child>().copy(id = doc.id)
-                        childrenList.add(child)
-                    }
+                snapshots?.forEach { doc ->
+                    // Convert Firestore doc to Child object and manually set the IDs
+                    val child = doc.toObject<Child>().copy(
+                        id = doc.id,
+                        parentId = userId // The current user is the parent
+                    )
+                    childrenList.add(child)
                 }
                 childrenAdapter.notifyDataSetChanged()
             }

@@ -1,7 +1,10 @@
 package com.sigmacoders.aichildmonitor.model
 
+import com.google.firebase.firestore.Exclude
+
 data class Child(
-    val id: String = "",
-    val name: String = "",
-    val isPaired: Boolean = false
+    @get:Exclude var id: String = "", // Exclude from Firestore serialization
+    var name: String = "",
+    var isPaired: Boolean = false,
+    var parentId: String = "" // Add parentId field
 )

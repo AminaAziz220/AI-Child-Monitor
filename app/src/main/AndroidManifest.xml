@@ -40,6 +40,9 @@
         <activity
             android:name=".ChildDashboardActivity"
             android:exported="false" />
+        <activity
+            android:name=".ChildHomeActivity"
+            android:exported="false" />
     </application>
 
 </manifest>
