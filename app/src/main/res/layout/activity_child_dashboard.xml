@@ -27,13 +27,14 @@
         app:cardCornerRadius="60dp"
         app:cardElevation="8dp">
 
-        <TextView
+        <!-- Changed from TextView to ImageView -->
+        <ImageView
             android:id="@+id/emotionalAvatar"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:gravity="center"
-            android:textSize="60sp"
-            tools:text="😐" />
+            android:scaleType="centerCrop"
+            tools:src="@drawable/bou_medium" />
+
     </androidx.cardview.widget.CardView>
 
     <androidx.cardview.widget.CardView

@@ -61,11 +61,22 @@ class ChildDashboardActivity : AppCompatActivity() {
 
             if (snapshot != null && snapshot.exists()) {
                 val childName = snapshot.getString("name") ?: "Child"
+                val riskLevelString = snapshot.getString("riskLevel") ?: "Unknown"
                 currentJournalText =
                     snapshot.getString("journalText")
                         ?: getString(R.string.no_journal_entry)
 
                 binding.childNameTextView.text = childName
+                binding.riskLevelValue.text = getString(R.string.risk_level, riskLevelString)
+
+                // Set initial image based on data from Firestore
+                when (riskLevelString.lowercase()) {
+                    "low" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_smile)
+                    "medium" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_mid)
+                    "high" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_sad)
+                    else -> { /* Optional: handle unknown state */ }
+                }
+
                 displayUsageDataFromSnapshot(snapshot)
             }
         }
@@ -133,6 +144,7 @@ class ChildDashboardActivity : AppCompatActivity() {
 
         Log.d("APP_CATEGORY", "Social Minutes: $socialMinutes")
         Log.d("APP_CATEGORY", "Gaming Minutes: $gamingMinutes")
+        Log.d("APP_CATEGORY", "Total Minutes: $totalMinutes")
 
         if (entries.isNotEmpty()) {
             setupBarChart(entries, labels)
@@ -192,7 +204,7 @@ class ChildDashboardActivity : AppCompatActivity() {
         json.put("phone_checks_per_day", 50) // Placeholder
         json.put("Age", 12) // Placeholder
         json.put("entertainment_ratio", entertainmentRatio)
-        json.put("night_usage_ratio", 0.0) // Placeholder
+        json.put("night_usage_ratio", 0.28) // Placeholder
         json.put("engagement_intensity", engagementIntensity)
         json.put("gaming_ratio", gamingRatio)
         json.put("social_ratio", socialRatio)
@@ -222,7 +234,6 @@ class ChildDashboardActivity : AppCompatActivity() {
                     val jsonResponse = JSONObject(responseBody)
                     val riskLevelInt = jsonResponse.optInt("risk_level", -1)
 
-                    // Convert the number to a descriptive string
                     val riskLevelString = when(riskLevelInt) {
                         0 -> "Low"
                         1 -> "Medium"
@@ -230,7 +241,6 @@ class ChildDashboardActivity : AppCompatActivity() {
                         else -> "Unknown"
                     }
 
-                    // Save the new risk level back to Firestore for persistence
                     if(parentId != null && childId != null) {
                         Firebase.firestore.collection("users").document(parentId!!).collection("children").document(childId!!)
                             .update("riskLevel", riskLevelString)
@@ -238,15 +248,15 @@ class ChildDashboardActivity : AppCompatActivity() {
                             .addOnFailureListener { e -> Log.w(tag, "Failed to update risk level in Firestore.", e) }
                     }
 
-                    // Update the UI on the main thread with the new string
                     runOnUiThread {
+                        // Update the UI with the new data from the API
                         binding.riskLevelValue.text = getString(R.string.risk_level, riskLevelString)
 
                         when (riskLevelInt) {
-                            0 -> binding.emotionalAvatar.text = "😊"
-                            1 -> binding.emotionalAvatar.text = "😐"
-                            2 -> binding.emotionalAvatar.text = "😔"
-                            else -> binding.emotionalAvatar.text = "🤷"
+                            0 -> binding.emotionalAvatar.setImageResource(R.drawable.boy_smile)
+                            1 -> binding.emotionalAvatar.setImageResource(R.drawable.boy_mid)
+                            2 -> binding.emotionalAvatar.setImageResource(R.drawable.boy_sad)
+                            else -> { /* Optional: handle unknown state */ }
                         }
                     }
                 } else {
