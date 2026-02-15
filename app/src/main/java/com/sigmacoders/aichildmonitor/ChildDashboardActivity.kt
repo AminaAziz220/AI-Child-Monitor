@@ -2,6 +2,7 @@ package com.sigmacoders.aichildmonitor
 
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.graphics.toColorInt
@@ -13,6 +14,11 @@ import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
 import com.sigmacoders.aichildmonitor.databinding.ActivityChildDashboardBinding
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.IOException
 
 class ChildDashboardActivity : AppCompatActivity() {
 
@@ -20,18 +26,18 @@ class ChildDashboardActivity : AppCompatActivity() {
     private val tag = "ChildDashboardActivity"
     private var childId: String? = null
     private var parentId: String? = null
+    private val client = OkHttpClient()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityChildDashboardBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Get IDs from the intent that started this activity
         childId = intent.getStringExtra("CHILD_ID")
         parentId = intent.getStringExtra("PARENT_ID")
 
         if (parentId == null || childId == null) {
-            Log.e(tag, "Parent ID or Child ID is null. Finishing activity.")
+            Log.e(tag, "Parent ID or Child ID is null.")
             finish()
             return
         }
@@ -41,7 +47,10 @@ class ChildDashboardActivity : AppCompatActivity() {
 
     private fun setupFirestoreListener(parentId: String, childId: String) {
         val db = Firebase.firestore
-        val childRef = db.collection("users").document(parentId).collection("children").document(childId)
+        val childRef =
+            db.collection("users").document(parentId)
+                .collection("children").document(childId)
+
         var currentJournalText = getString(R.string.no_journal_entry)
 
         childRef.addSnapshotListener { snapshot, error ->
@@ -51,25 +60,13 @@ class ChildDashboardActivity : AppCompatActivity() {
             }
 
             if (snapshot != null && snapshot.exists()) {
-                // Update basic child info
                 val childName = snapshot.getString("name") ?: "Child"
-                val riskLevel = snapshot.getString("riskLevel") ?: "Low"
-                currentJournalText = snapshot.getString("journalText") ?: getString(R.string.no_journal_entry)
+                currentJournalText =
+                    snapshot.getString("journalText")
+                        ?: getString(R.string.no_journal_entry)
 
                 binding.childNameTextView.text = childName
-                binding.riskLevelValue.text = getString(R.string.risk_level, riskLevel)
-
-                when (riskLevel.lowercase()) {
-                    "low" -> binding.emotionalAvatar.text = "😊"
-                    "medium" -> binding.emotionalAvatar.text = "😐"
-                    "high" -> binding.emotionalAvatar.text = "😔"
-                    else -> binding.emotionalAvatar.text = "🤷"
-                }
-
-                // Update UI from Firestore usage data
                 displayUsageDataFromSnapshot(snapshot)
-            } else {
-                Log.w(tag, "Child document does not exist.")
             }
         }
 
@@ -84,44 +81,193 @@ class ChildDashboardActivity : AppCompatActivity() {
 
     @Suppress("UNCHECKED_CAST")
     private fun displayUsageDataFromSnapshot(snapshot: com.google.firebase.firestore.DocumentSnapshot) {
-        val usageData = snapshot.get("usage") as? Map<String, Any>
 
-        if (usageData != null) {
-            val totalMinutes = (usageData["totalMinutes"] as? Long) ?: 0L
-            val topApps = (usageData["topApps"] as? List<Map<String, Any>>) ?: emptyList()
+        val usageData = snapshot.get("usage") as? Map<String, Any> ?: return
 
-            // Update total time text view
-            val hours = totalMinutes / 60
-            val minutes = totalMinutes % 60
-            binding.totalTimeTextView.text = getString(R.string.total_today, hours, minutes)
+        val totalMinutes = (usageData["totalMinutes"] as? Long) ?: 0L
+        val topApps =
+            (usageData["topApps"] as? List<Map<String, Any>>) ?: emptyList()
 
-            // Update bar chart
-            val entries = ArrayList<BarEntry>()
-            val labels = ArrayList<String>()
-            topApps.forEachIndexed { index, app ->
-                val appName = app["appName"] as? String ?: "Unknown"
-                val usageMinutes = (app["usageMinutes"] as? Long)?.toFloat() ?: 0f
-                entries.add(BarEntry(index.toFloat(), usageMinutes))
-                labels.add(appName)
+        var socialMinutes = 0L
+        var gamingMinutes = 0L
+
+        // ===== TOTAL TIME DISPLAY =====
+        val hours = totalMinutes / 60
+        val minutes = totalMinutes % 60
+        binding.totalTimeTextView.text =
+            getString(R.string.total_today, hours, minutes)
+
+        // ===== BAR CHART =====
+        val entries = ArrayList<BarEntry>()
+        val labels = ArrayList<String>()
+
+        topApps.forEachIndexed { index, app ->
+
+            val appName = app["appName"] as? String ?: "Unknown"
+            val usageMinutesLong = (app["usageMinutes"] as? Long) ?: 0L
+
+            entries.add(
+                BarEntry(index.toFloat(), usageMinutesLong.toFloat())
+            )
+            labels.add(appName)
+
+            val name = appName.lowercase()
+
+            if (name.contains("instagram") ||
+                name.contains("facebook") ||
+                name.contains("whatsapp") ||
+                name.contains("youtube") ||
+                name.contains("snapchat")) {
+                socialMinutes += usageMinutesLong
             }
 
-            if (entries.isNotEmpty()) {
-                setupBarChart(entries, labels)
-            } else {
-                binding.appUsageBarChart.data = null
-                binding.appUsageBarChart.invalidate()
+            if (name.contains("pubg") ||
+                name.contains("free fire") ||
+                name.contains("cod") ||
+                name.contains("minecraft") ||
+                name.contains("hungrysharkevolution") ||
+                name.contains("roblox")) {
+                gamingMinutes += usageMinutesLong
             }
+        }
+
+        Log.d("APP_CATEGORY", "Social Minutes: $socialMinutes")
+        Log.d("APP_CATEGORY", "Gaming Minutes: $gamingMinutes")
+
+        if (entries.isNotEmpty()) {
+            setupBarChart(entries, labels)
         } else {
-            // If no usage data is present, clear the views
-            binding.totalTimeTextView.text = getString(R.string.total_today, 0, 0)
             binding.appUsageBarChart.data = null
             binding.appUsageBarChart.invalidate()
         }
+
+        // ===== FEATURE ENGINEERING =====
+        val totalHours = totalMinutes / 60.0
+        val socialHours = socialMinutes / 60.0
+        val gamingHours = gamingMinutes / 60.0
+
+        val entertainmentRatio =
+            if (totalHours > 0)
+                (socialHours + gamingHours) / totalHours
+            else 0.0
+
+        val gamingRatio =
+            if (totalHours > 0)
+                gamingHours / totalHours
+            else 0.0
+
+        val socialRatio =
+            if (totalHours > 0)
+                socialHours / totalHours
+            else 0.0
+
+        val engagementIntensity = totalHours * 50   // temporary proxy
+
+        sendRiskRequest(
+            totalHours,
+            socialHours,
+            gamingHours,
+            entertainmentRatio,
+            gamingRatio,
+            socialRatio,
+            engagementIntensity
+        )
     }
 
-    private fun setupBarChart(entries: ArrayList<BarEntry>, labels: ArrayList<String>) {
-        val dataSet = BarDataSet(entries, getString(R.string.app_usage_in_minutes))
+    private fun sendRiskRequest(
+        totalHours: Double,
+        socialHours: Double,
+        gamingHours: Double,
+        entertainmentRatio: Double,
+        gamingRatio: Double,
+        socialRatio: Double,
+        engagementIntensity: Double
+    ) {
+
+        val json = JSONObject()
+        json.put("avg_screen_time", totalHours)
+        json.put("social_media_hours", socialHours)
+        json.put("gaming_hours", gamingHours)
+        json.put("night_usage", 2) // Placeholder
+        json.put("phone_checks_per_day", 50) // Placeholder
+        json.put("Age", 12) // Placeholder
+        json.put("entertainment_ratio", entertainmentRatio)
+        json.put("night_usage_ratio", 0.0) // Placeholder
+        json.put("engagement_intensity", engagementIntensity)
+        json.put("gaming_ratio", gamingRatio)
+        json.put("social_ratio", socialRatio)
+
+        val body = json.toString()
+            .toRequestBody("application/json".toMediaTypeOrNull())
+
+        val request = Request.Builder()
+            .url("http://192.168.1.78:5000/predict")
+            .post(body)
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e("API_ERROR", "OkHttp onFailure: ${e.message}", e)
+                runOnUiThread {
+                    Toast.makeText(applicationContext, "API Failure: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val responseBody = response.body?.string()
+
+                if (response.isSuccessful && responseBody != null) {
+                    Log.d("API_RESPONSE", responseBody)
+                    val jsonResponse = JSONObject(responseBody)
+                    val riskLevelInt = jsonResponse.optInt("risk_level", -1)
+
+                    // Convert the number to a descriptive string
+                    val riskLevelString = when(riskLevelInt) {
+                        0 -> "Low"
+                        1 -> "Medium"
+                        2 -> "High"
+                        else -> "Unknown"
+                    }
+
+                    // Save the new risk level back to Firestore for persistence
+                    if(parentId != null && childId != null) {
+                        Firebase.firestore.collection("users").document(parentId!!).collection("children").document(childId!!)
+                            .update("riskLevel", riskLevelString)
+                            .addOnSuccessListener { Log.d(tag, "Successfully updated risk level in Firestore.") }
+                            .addOnFailureListener { e -> Log.w(tag, "Failed to update risk level in Firestore.", e) }
+                    }
+
+                    // Update the UI on the main thread with the new string
+                    runOnUiThread {
+                        binding.riskLevelValue.text = getString(R.string.risk_level, riskLevelString)
+
+                        when (riskLevelInt) {
+                            0 -> binding.emotionalAvatar.text = "😊"
+                            1 -> binding.emotionalAvatar.text = "😐"
+                            2 -> binding.emotionalAvatar.text = "😔"
+                            else -> binding.emotionalAvatar.text = "🤷"
+                        }
+                    }
+                } else {
+                    Log.e("API_ERROR", "Unsuccessful response: ${response.code} ${response.message}\nBody: $responseBody")
+                    runOnUiThread {
+                         Toast.makeText(applicationContext, "API Error: ${response.code}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        })
+    }
+
+    private fun setupBarChart(
+        entries: ArrayList<BarEntry>,
+        labels: ArrayList<String>
+    ) {
+
+        val dataSet =
+            BarDataSet(entries, getString(R.string.app_usage_in_minutes))
         dataSet.color = "#673AB7".toColorInt()
+
         val barData = BarData(dataSet)
         barData.barWidth = 0.5f
 
@@ -132,15 +278,13 @@ class ChildDashboardActivity : AppCompatActivity() {
 
         val xAxis = binding.appUsageBarChart.xAxis
         xAxis.valueFormatter = IndexAxisValueFormatter(labels)
-        xAxis.setDrawGridLines(false)
-        xAxis.granularity = 1f
         xAxis.position = XAxis.XAxisPosition.BOTTOM
+        xAxis.granularity = 1f
         xAxis.labelRotationAngle = -45f
 
-        binding.appUsageBarChart.axisLeft.setDrawGridLines(false)
         binding.appUsageBarChart.axisLeft.axisMinimum = 0f
         binding.appUsageBarChart.axisRight.isEnabled = false
 
-        binding.appUsageBarChart.invalidate() // Refresh chart
+        binding.appUsageBarChart.invalidate()
     }
 }
