@@ -6,10 +6,8 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
-import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
-
 
 class VideoClassifier {
 
@@ -25,6 +23,7 @@ class VideoClassifier {
         onComplete: (String, Double, String) -> Unit,
         onError: (Exception) -> Unit
     ) {
+
         val text = "$title. Channel: $channel"
 
         val candidateLabels = listOf(
@@ -33,17 +32,14 @@ class VideoClassifier {
             "gaming",
             "violent",
             "adult",
-            "harmful",
-            "safe"
+            "harmful"
         )
 
-        // Create the JSON payload for the API request
         val json = JSONObject().apply {
             put("inputs", text)
             put("parameters", JSONObject().apply {
                 put("candidate_labels", candidateLabels)
             })
-            // Add an option to wait for the model to be ready
             put("options", JSONObject().apply {
                 put("wait_for_model", true)
             })
@@ -59,42 +55,75 @@ class VideoClassifier {
             .post(requestBody)
             .build()
 
-
         client.newCall(request).enqueue(object : Callback {
 
             override fun onFailure(call: Call, e: IOException) {
-                // Network failure
                 onError(e)
             }
 
             override fun onResponse(call: Call, response: Response) {
 
-                val body = response.body?.string() ?: ""   // ✅ declare OUTSIDE try
+                val body = response.body?.string() ?: ""
 
                 try {
                     Log.d("HF_RAW", body)
 
                     val jsonArray = JSONArray(body)
 
-                    val topResult = jsonArray.getJSONObject(0)
-                    val rawLabel = topResult.getString("label")
-                    val confidence = topResult.getDouble("score")
+                    var topCategory = ""
+                    var topConfidence = 0.0
 
-                    val category = rawLabel
-                        .replace("[", "")
-                        .replace("]", "")
-                        .trim()
+                    var adultScore = 0.0
+                    var harmfulScore = 0.0
+                    var violentScore = 0.0
 
-                    val safety = when (category.lowercase()) {
-                        "violent", "adult", "harmful" -> "unsafe"
-                        else -> "safe"
+                    for (i in 0 until jsonArray.length()) {
+                        val item = jsonArray.getJSONObject(i)
+
+                        val label = item.getString("label")
+                            .replace("[", "")
+                            .replace("]", "")
+                            .lowercase()
+                            .trim()
+
+                        val score = item.getDouble("score")
+
+                        // First item = highest confidence
+                        if (i == 0) {
+                            topCategory = label
+                            topConfidence = score
+                        }
+
+                        when (label) {
+                            "adult" -> adultScore = score
+                            "harmful" -> harmfulScore = score
+                            "violent" -> violentScore = score
+                        }
                     }
+
+                    val safety = if (
+                        adultScore > 0.40 ||
+                        harmfulScore > 0.35 ||
+                        violentScore > 0.35
+                    ) {
+                        "unsafe"
+                    } else {
+                        "safe"
+                    }
+
+                    Log.i(
+                        "CLASSIFICATION_RESULT",
+                        "Top=$topCategory ($topConfidence) | adult=$adultScore | harmful=$harmfulScore | violent=$violentScore | safety=$safety"
+                    )
 
                     val data = hashMapOf(
                         "title" to title,
                         "channel" to channel,
-                        "category" to category,
-                        "confidence" to confidence,
+                        "category" to topCategory,
+                        "confidence" to topConfidence,
+                        "adultScore" to adultScore,
+                        "harmfulScore" to harmfulScore,
+                        "violentScore" to violentScore,
                         "safety" to safety,
                         "timestamp" to System.currentTimeMillis()
                     )
@@ -106,47 +135,12 @@ class VideoClassifier {
                         .collection("videoLogs")
                         .add(data)
 
-                    onComplete(category, confidence, safety)
+                    onComplete(topCategory, topConfidence, safety)
 
                 } catch (e: Exception) {
                     onError(Exception("Failed to parse JSON. Response was: $body", e))
                 }
             }
-
-
         })
-    }
-
-    private fun saveResultToFirestore(
-        parentId: String,
-        childId: String,
-        title: String,
-        channel: String,
-        category: String,
-        confidence: Double,
-        safety: String
-    ) {
-        val data = hashMapOf(
-            "title" to title,
-            "channel" to channel,
-            "category" to category,
-            "confidence" to confidence,
-            "safety" to safety,
-            "timestamp" to System.currentTimeMillis()
-        )
-
-        db.collection("users")
-            .document(parentId)
-            .collection("children")
-            .document(childId)
-            .collection("videoLogs")
-            .add(data)
-            .addOnSuccessListener {
-                Log.d("FIRESTORE_SUCCESS", "Video log saved successfully.")
-            }
-            .addOnFailureListener { e ->
-                Log.e("FIRESTORE_ERROR", "Error saving video log", e)
-                // You might want to handle this failure case, perhaps with another callback
-            }
     }
 }

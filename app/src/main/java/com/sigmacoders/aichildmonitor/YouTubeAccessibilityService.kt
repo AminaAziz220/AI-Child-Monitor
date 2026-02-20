@@ -23,10 +23,14 @@ class YouTubeAccessibilityService : AccessibilityService() {
         val watchPanelNodes = rootNode.findAccessibilityNodeInfosByViewId("com.google.android.youtube:id/watch_panel")
 
         var title: CharSequence? = null
+        var videoId: String? = null
+
 
         if (watchPanelNodes.isNotEmpty()) {
             // Search inside the watch_panel for the first piece of text.
             title = findFirstTextInNode(watchPanelNodes[0])
+            videoId = extractVideoId(rootNode.text?.toString() ?: "")
+
         }
 
         // --- IMPORTANT: Recycle the nodes obtained from the system ---
@@ -34,7 +38,13 @@ class YouTubeAccessibilityService : AccessibilityService() {
         rootNode.recycle()
 
         // Check if we found a new, valid title that's not just a timestamp
-        if (!title.isNullOrBlank() && title != lastDetectedTitle && !isTimestamp(title.toString())) {
+        if (
+            !title.isNullOrBlank() &&
+            title != lastDetectedTitle &&
+            !isTimestamp(title.toString()) &&
+            isValidVideoTitle(title.toString())
+        ) {
+
             lastDetectedTitle = title
             Log.d(TAG, "----------------------------------------------------")
             Log.d(TAG, "VIDEO TITLE DETECTED: $title")
@@ -44,6 +54,7 @@ class YouTubeAccessibilityService : AccessibilityService() {
             YouTubeClassifierTrigger.classifyIfNeeded(
                 context = this,
                 title = title.toString(),
+                videoId = videoId,
                 parentId = "PARENT_ID_HERE",
                 childId = "CHILD_ID_HERE"
             )
@@ -80,6 +91,10 @@ class YouTubeAccessibilityService : AccessibilityService() {
         return text.matches(Regex("^\\d{1,2}:\\d{2}.*"))
     }
 
+    private fun extractVideoId(text: String): String? {
+        val regex = Regex("v=([a-zA-Z0-9_-]{11})")
+        return regex.find(text)?.groupValues?.get(1)
+    }
 
     override fun onInterrupt() {
         Log.w(TAG, "Service interrupted")
@@ -89,4 +104,35 @@ class YouTubeAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         Log.i(TAG, "YouTube Accessibility Service Connected")
     }
+
+    private fun isValidVideoTitle(text: String): Boolean {
+
+        val trimmed = text.trim().lowercase()
+
+        // Ignore very short text
+        if (trimmed.length < 8) return false
+
+        // Block common YouTube UI labels
+        val blockedWords = listOf(
+            "live",
+            "comments",
+            "shorts",
+            "home",
+            "library",
+            "subscriptions",
+            "trending",
+            "search",
+            "share",
+            "like",
+            "dislike"
+        )
+
+        if (blockedWords.contains(trimmed)) return false
+
+        // Ignore single-word titles (often UI elements)
+        if (!trimmed.contains(" ")) return false
+
+        return true
+    }
+
 }
