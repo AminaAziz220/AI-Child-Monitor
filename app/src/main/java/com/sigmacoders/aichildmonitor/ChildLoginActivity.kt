@@ -1,9 +1,12 @@
 package com.sigmacoders.aichildmonitor
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import android.view.LayoutInflater
 import android.widget.EditText
+import android.widget.RadioGroup
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -22,11 +25,9 @@ class ChildLoginActivity : AppCompatActivity() {
         binding = ActivityChildLoginBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Disable button until we are authenticated
         binding.pairButton.isEnabled = false
         binding.pairButton.text = "Authenticating..."
 
-        // Sign in anonymously to get a temporary ID for pairing & data uploads
         if (Firebase.auth.currentUser == null) {
             Firebase.auth.signInAnonymously()
                 .addOnSuccessListener {
@@ -39,7 +40,6 @@ class ChildLoginActivity : AppCompatActivity() {
                     Toast.makeText(this, "Authentication failed. Check connection.", Toast.LENGTH_LONG).show()
                 }
         } else {
-            // Already authenticated from a previous session
             binding.pairButton.isEnabled = true
             binding.pairButton.text = "Pair Device"
         }
@@ -67,7 +67,7 @@ class ChildLoginActivity : AppCompatActivity() {
 
                 val parentId = document.getString("parentId")
                 if (parentId != null) {
-                    showNameDialog(parentId, pairingKeyRef)
+                    showChildDetailsDialog(parentId, pairingKeyRef)
                 } else {
                     Toast.makeText(this, "Invalid pairing data.", Toast.LENGTH_SHORT).show()
                 }
@@ -78,19 +78,24 @@ class ChildLoginActivity : AppCompatActivity() {
             }
     }
 
-    private fun showNameDialog(parentId: String, pairingKeyRef: com.google.firebase.firestore.DocumentReference) {
-        val editText = EditText(this).apply {
-            hint = "Enter your name"
-        }
+    private fun showChildDetailsDialog(parentId: String, pairingKeyRef: com.google.firebase.firestore.DocumentReference) {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_child_details, null)
+        val nameEditText = dialogView.findViewById<EditText>(R.id.childNameEditText)
+        val genderRadioGroup = dialogView.findViewById<RadioGroup>(R.id.genderRadioGroup)
 
         AlertDialog.Builder(this)
-            .setTitle("Enter Your Name")
-            .setView(editText)
+            .setTitle("Enter Your Details")
+            .setView(dialogView)
             .setCancelable(false)
             .setPositiveButton("Confirm") { dialog, _ ->
-                val childName = editText.text.toString().trim()
-                if (childName.isNotEmpty()) {
-                    createChildRecord(parentId, childName, pairingKeyRef)
+                val childName = nameEditText.text.toString().trim()
+                val selectedGenderId = genderRadioGroup.checkedRadioButtonId
+                val gender = if (selectedGenderId == R.id.boyRadioButton) "Boy" else if (selectedGenderId == R.id.girlRadioButton) "Girl" else ""
+
+                if (childName.isNotEmpty() && gender.isNotEmpty()) {
+                    createChildRecord(parentId, childName, gender, pairingKeyRef)
+                } else {
+                    Toast.makeText(this, "Please enter your name and select a gender.", Toast.LENGTH_SHORT).show()
                 }
                 dialog.dismiss()
             }
@@ -98,10 +103,11 @@ class ChildLoginActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun createChildRecord(parentId: String, childName: String, pairingKeyRef: com.google.firebase.firestore.DocumentReference) {
+    private fun createChildRecord(parentId: String, childName: String, gender: String, pairingKeyRef: com.google.firebase.firestore.DocumentReference) {
         val db = Firebase.firestore
         val childData = hashMapOf(
             "name" to childName,
+            "gender" to gender,
             "isPaired" to true,
             "parentId" to parentId
         )
@@ -109,12 +115,15 @@ class ChildLoginActivity : AppCompatActivity() {
         db.collection("users").document(parentId).collection("children")
             .add(childData)
             .addOnSuccessListener { childDocRef ->
-                // Pairing is complete, now delete the temporary key
                 pairingKeyRef.delete()
+                
+                val prefs = getSharedPreferences("AI_CHILD_MONITOR_PREFS", Context.MODE_PRIVATE).edit()
+                prefs.putString("PARENT_ID", parentId)
+                prefs.putString("CHILD_ID", childDocRef.id)
+                prefs.apply()
 
                 Toast.makeText(this, "Device paired successfully!", Toast.LENGTH_SHORT).show()
 
-                // Navigate to the new ChildHomeActivity
                 val intent = Intent(this, ChildHomeActivity::class.java)
                 intent.putExtra("PARENT_ID", parentId)
                 intent.putExtra("CHILD_ID", childDocRef.id)
