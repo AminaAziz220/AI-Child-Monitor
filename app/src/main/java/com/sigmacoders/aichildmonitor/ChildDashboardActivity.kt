@@ -1,5 +1,6 @@
 package com.sigmacoders.aichildmonitor
 
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -27,6 +28,7 @@ class ChildDashboardActivity : AppCompatActivity() {
     private var childId: String? = null
     private var parentId: String? = null
     private val client = OkHttpClient()
+    private var childGender: String = "Boy" // Variable to store gender
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,6 +64,7 @@ class ChildDashboardActivity : AppCompatActivity() {
             if (snapshot != null && snapshot.exists()) {
                 val childName = snapshot.getString("name") ?: "Child"
                 val riskLevelString = snapshot.getString("riskLevel") ?: "Unknown"
+                childGender = snapshot.getString("gender") ?: "Boy" // Get and store the gender
                 currentJournalText =
                     snapshot.getString("journalText")
                         ?: getString(R.string.no_journal_entry)
@@ -69,13 +72,8 @@ class ChildDashboardActivity : AppCompatActivity() {
                 binding.childNameTextView.text = childName
                 binding.riskLevelValue.text = getString(R.string.risk_level, riskLevelString)
 
-                // Set initial image based on data from Firestore
-                when (riskLevelString.lowercase()) {
-                    "low" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_smile)
-                    "medium" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_mid)
-                    "high" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_sad)
-                    else -> { /* Optional: handle unknown state */ }
-                }
+                // Set initial image based on gender and risk level from Firestore
+                updateAvatar(riskLevelString, childGender)
 
                 displayUsageDataFromSnapshot(snapshot)
             }
@@ -87,6 +85,22 @@ class ChildDashboardActivity : AppCompatActivity() {
                 .setMessage(currentJournalText)
                 .setPositiveButton(getString(R.string.close), null)
                 .show()
+        }
+    }
+
+    private fun updateAvatar(riskLevel: String, gender: String) {
+        if (gender == "Girl") {
+            when (riskLevel.lowercase()) {
+                "low" -> binding.emotionalAvatar.setImageResource(R.drawable.girl_smile)
+                "medium" -> binding.emotionalAvatar.setImageResource(R.drawable.girl_mid)
+                "high" -> binding.emotionalAvatar.setImageResource(R.drawable.girl_sad)
+            }
+        } else { // Default to Boy
+            when (riskLevel.lowercase()) {
+                "low" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_smile)
+                "medium" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_mid)
+                "high" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_sad)
+            }
         }
     }
 
@@ -113,38 +127,19 @@ class ChildDashboardActivity : AppCompatActivity() {
         val labels = ArrayList<String>()
 
         topApps.forEachIndexed { index, app ->
-
             val appName = app["appName"] as? String ?: "Unknown"
             val usageMinutesLong = (app["usageMinutes"] as? Long) ?: 0L
+            val category = (app["category"] as? Long)?.toInt() ?: -1 // Get the category
 
-            entries.add(
-                BarEntry(index.toFloat(), usageMinutesLong.toFloat())
-            )
+            entries.add(BarEntry(index.toFloat(), usageMinutesLong.toFloat()))
             labels.add(appName)
 
-            val name = appName.lowercase()
-
-            if (name.contains("instagram") ||
-                name.contains("facebook") ||
-                name.contains("whatsapp") ||
-                name.contains("youtube") ||
-                name.contains("snapchat")) {
-                socialMinutes += usageMinutesLong
-            }
-
-            if (name.contains("pubg") ||
-                name.contains("free fire") ||
-                name.contains("cod") ||
-                name.contains("minecraft") ||
-                name.contains("hungrysharkevolution") ||
-                name.contains("roblox")) {
-                gamingMinutes += usageMinutesLong
+            // Sum minutes based on the official app category
+            when (category) {
+                ApplicationInfo.CATEGORY_GAME -> gamingMinutes += usageMinutesLong
+                ApplicationInfo.CATEGORY_SOCIAL -> socialMinutes += usageMinutesLong
             }
         }
-
-        Log.d("APP_CATEGORY", "Social Minutes: $socialMinutes")
-        Log.d("APP_CATEGORY", "Gaming Minutes: $gamingMinutes")
-        Log.d("APP_CATEGORY", "Total Minutes: $totalMinutes")
 
         if (entries.isNotEmpty()) {
             setupBarChart(entries, labels)
@@ -249,15 +244,9 @@ class ChildDashboardActivity : AppCompatActivity() {
                     }
 
                     runOnUiThread {
-                        // Update the UI with the new data from the API
                         binding.riskLevelValue.text = getString(R.string.risk_level, riskLevelString)
-
-                        when (riskLevelInt) {
-                            0 -> binding.emotionalAvatar.setImageResource(R.drawable.boy_smile)
-                            1 -> binding.emotionalAvatar.setImageResource(R.drawable.boy_mid)
-                            2 -> binding.emotionalAvatar.setImageResource(R.drawable.boy_sad)
-                            else -> { /* Optional: handle unknown state */ }
-                        }
+                        // Update the UI with the new data from the API, using the stored gender
+                        updateAvatar(riskLevelString, childGender)
                     }
                 } else {
                     Log.e("API_ERROR", "Unsuccessful response: ${response.code} ${response.message}\nBody: $responseBody")
