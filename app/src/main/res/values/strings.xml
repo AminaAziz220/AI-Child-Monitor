@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">AI Child Monitor</string>
+    <string name="no_journal_entry">No journal entry found for today.</string>
+    <string name="risk_level">Risk Level: %1$s</string>
+    <string name="todays_journal_entry">Today\'s Journal Entry</string>
+    <string name="close">Close</string>
+    <string name="total_today">Total (Today): %1$dh %2$dm</string>
+    <string name="app_usage_in_minutes">App Usage in Minutes</string>
 </resources>

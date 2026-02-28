@@ -49,8 +49,9 @@ class MainActivity : AppCompatActivity() {
             intent.putExtra("CHILD_ID", child.id)
             startActivity(intent)
         }
-        binding.childrenRecyclerView.adapter = childrenAdapter
-        binding.childrenRecyclerView.layoutManager = LinearLayoutManager(this)
+        // Use safe calls (?.) to resolve the nullability error
+        binding.childrenRecyclerView?.adapter = childrenAdapter
+        binding.childrenRecyclerView?.layoutManager = LinearLayoutManager(this)
     }
 
     private fun setupClickListeners(userId: String) {

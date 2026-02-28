@@ -213,7 +213,7 @@ class ChildDashboardActivity : AppCompatActivity() {
             .toRequestBody("application/json".toMediaTypeOrNull())
 
         val request = Request.Builder()
-            .url("http://192.168.1.78:5000/predict")
+            .url("http://192.168.1.7:5000/predict")
             .post(body)
             .build()
 
