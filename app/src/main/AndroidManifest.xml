@@ -17,7 +17,6 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.AIChildMonitor">
-
         <activity
             android:name=".RoleSelectionActivity"
             android:exported="true">
@@ -45,6 +44,19 @@
         <activity
             android:name=".ChildHomeActivity"
             android:exported="false" />
+        <service
+            android:name=".YouTubeAccessibilityService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/youtube_service_config" />
+        </service>
+
     </application>
 
 </manifest>
