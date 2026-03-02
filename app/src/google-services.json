@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "675467675023",
+    "project_id": "ai-child-monitor",
+    "storage_bucket": "ai-child-monitor.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:675467675023:android:10585f3690601e7a3277fa",
+        "android_client_info": {
+          "package_name": "com.sigmacoders.aichildmonitor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBhBMiVBBuModCrthK69mNcr1yFu87tNSo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
