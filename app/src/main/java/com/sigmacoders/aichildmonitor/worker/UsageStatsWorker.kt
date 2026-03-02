@@ -1,15 +1,16 @@
 package com.sigmacoders.aichildmonitor.worker
 
 import android.app.AppOpsManager
+import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Process
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.google.firebase.Timestamp
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
@@ -21,20 +22,19 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
     CoroutineWorker(appContext, workerParams) {
 
     private val tag = "UsageStatsWorker"
+    private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
     override suspend fun doWork(): Result {
         val parentId = inputData.getString("PARENT_ID")
         val childId = inputData.getString("CHILD_ID")
 
         if (parentId.isNullOrEmpty() || childId.isNullOrEmpty()) {
-            Log.e(tag, "Parent ID or Child ID is missing. Cannot perform work.")
+            Log.e(tag, "Parent ID or Child ID is missing.")
             return Result.failure()
         }
 
-        Log.d(tag, "Worker started for parent: $parentId, child: $childId")
-
         if (!hasUsageStatsPermission()) {
-            Log.e(tag, "Usage stats permission not granted. Stopping worker.")
+            Log.e(tag, "Usage stats permission not granted.")
             return Result.failure()
         }
 
@@ -48,57 +48,169 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
     }
 
     private suspend fun uploadUsageStats(parentId: String, childId: String) {
+        val db = Firebase.firestore
+        val childRef = db.collection("users")
+            .document(parentId)
+            .collection("children")
+            .document(childId)
+
+        val usageByDate = hashMapOf<String, Any>()
+        val activeDateKeys = mutableListOf<String>()
+
+        // Fetch data for the last 7 days
+        for (i in 0..6) {
+            val calendar = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -i) }
+            val dateKey = dateFormat.format(calendar.time)
+            val dayData = fetchDayUsage(calendar)
+            
+            usageByDate[dateKey] = dayData
+            activeDateKeys.add(dateKey)
+        }
+
+        usageByDate["lastUpdated"] = Timestamp.now()
+
+        // Upload all 7 days to Firestore
+        childRef.set(
+            hashMapOf("usageByDate" to usageByDate),
+            SetOptions.merge()
+        ).await()
+
+        Log.d(tag, "Uploaded usage for the last 7 days: $activeDateKeys")
+
+        flushOldData(childRef, activeDateKeys)
+    }
+
+    private fun fetchDayUsage(dayCal: Calendar): Map<String, Any> {
         val usageStatsManager =
             applicationContext.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
-        val cal = Calendar.getInstance()
-        cal.set(Calendar.HOUR_OF_DAY, 0)
-        cal.set(Calendar.MINUTE, 0)
-        cal.set(Calendar.SECOND, 0)
-        cal.set(Calendar.MILLISECOND, 0)
-        val startTime = cal.timeInMillis
-        val endTime = System.currentTimeMillis()
+        val startCal = dayCal.clone() as Calendar
+        startCal.set(Calendar.HOUR_OF_DAY, 0)
+        startCal.set(Calendar.MINUTE, 0)
+        startCal.set(Calendar.SECOND, 0)
+        startCal.set(Calendar.MILLISECOND, 0)
 
-        val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
+        val endCal = dayCal.clone() as Calendar
+        endCal.set(Calendar.HOUR_OF_DAY, 23)
+        endCal.set(Calendar.MINUTE, 59)
+        endCal.set(Calendar.SECOND, 59)
+        endCal.set(Calendar.MILLISECOND, 999)
 
-        if (stats != null) {
+        val startTime = startCal.timeInMillis
+        val endTime = minOf(endCal.timeInMillis, System.currentTimeMillis())
+
+        val stats = usageStatsManager.queryUsageStats(
+            UsageStatsManager.INTERVAL_DAILY,
+            startTime,
+            endTime
+        )
+
+        var totalScreenTime = 0L
+        val topApps = mutableListOf<Map<String, Any>>()
+
+        if (!stats.isNullOrEmpty()) {
             val sortedStats = stats.sortedByDescending { it.totalTimeInForeground }
-            var totalScreenTime = 0L
-            val topApps = mutableListOf<Map<String, Any>>()
 
-            sortedStats.forEach { usageStats ->
-                if (usageStats.totalTimeInForeground > 0) {
-                    totalScreenTime += usageStats.totalTimeInForeground
-                    if (topApps.size < 5) {
-                        val appInfo = getAppInfo(usageStats.packageName)
-                        if (appInfo != null) {
-                            val appName = appInfo.loadLabel(applicationContext.packageManager).toString()
-                            val usageMinutes = usageStats.totalTimeInForeground / (1000 * 60)
-                            if (usageMinutes > 0) {
-                                topApps.add(mapOf(
-                                    "appName" to appName,
+            sortedStats.forEach { usageStat ->
+                if (usageStat.totalTimeInForeground > 0) {
+                    totalScreenTime += usageStat.totalTimeInForeground
+
+                    if (topApps.size < 15) { // Increased limit for more detail
+                        val usageMinutes = usageStat.totalTimeInForeground / (1000 * 60)
+                        if (usageMinutes > 0) {
+                            topApps.add(
+                                mapOf(
+                                    "appName" to getAppName(usageStat.packageName),
                                     "usageMinutes" to usageMinutes,
-                                    "category" to appInfo.category // Include the category
-                                ))
-                            }
+                                    "category" to getCategory(usageStat.packageName)
+                                )
+                            )
                         }
                     }
                 }
             }
+        }
 
-            val totalMinutes = totalScreenTime / (1000 * 60)
-            val usageMap = hashMapOf(
-                "totalMinutes" to totalMinutes,
-                "topApps" to topApps,
-                "date" to SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()),
-                "lastUpdated" to Timestamp.now()
-            )
+        val phoneChecks = calculatePhoneChecks(dayCal)
 
-            val db = Firebase.firestore
-            val childRef = db.collection("users").document(parentId).collection("children").document(childId)
+        return mapOf(
+            "totalMinutes" to totalScreenTime / (1000 * 60),
+            "phoneChecks" to phoneChecks,
+            "topApps" to topApps,
+            "lastUpdated" to Timestamp.now()
+        )
+    }
 
-            childRef.set(hashMapOf("usage" to usageMap), SetOptions.merge()).await()
-            Log.d(tag, "Successfully uploaded usage stats for child $childId.")
+    private fun calculatePhoneChecks(dayCal: Calendar): Int {
+        val usageStatsManager =
+            applicationContext.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+
+        val startCal = dayCal.clone() as Calendar
+        startCal.set(Calendar.HOUR_OF_DAY, 0)
+        startCal.set(Calendar.MINUTE, 0)
+        startCal.set(Calendar.SECOND, 0)
+        startCal.set(Calendar.MILLISECOND, 0)
+
+        val endCal = dayCal.clone() as Calendar
+        endCal.set(Calendar.HOUR_OF_DAY, 23)
+        endCal.set(Calendar.MINUTE, 59)
+        endCal.set(Calendar.SECOND, 59)
+        endCal.set(Calendar.MILLISECOND, 999)
+
+        val startTime = startCal.timeInMillis
+        val endTime = minOf(endCal.timeInMillis, System.currentTimeMillis())
+
+        val usageEvents = usageStatsManager.queryEvents(startTime, endTime)
+        val event = UsageEvents.Event()
+        var unlockCount = 0
+
+        while (usageEvents.hasNextEvent()) {
+            usageEvents.getNextEvent(event)
+            if (event.eventType == UsageEvents.Event.KEYGUARD_HIDDEN) {
+                unlockCount++
+            }
+        }
+        return unlockCount
+    }
+
+    private suspend fun flushOldData(
+        childRef: com.google.firebase.firestore.DocumentReference,
+        activeKeys: List<String>
+    ) {
+        try {
+            val snapshot = childRef.get().await()
+            @Suppress("UNCHECKED_CAST")
+            val usageByDate = snapshot.get("usageByDate") as? Map<String, Any> ?: return
+
+            val keysToDelete = usageByDate.keys.filter { key ->
+                key != "lastUpdated" && !activeKeys.contains(key)
+            }
+
+            if (keysToDelete.isNotEmpty()) {
+                val updates = keysToDelete.associate { "usageByDate.$it" to FieldValue.delete() }
+                childRef.update(updates).await()
+                Log.d(tag, "Flushed old data keys: $keysToDelete")
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Error flushing old data", e)
+        }
+    }
+
+    private fun getAppName(packageName: String): String {
+        val pm = applicationContext.packageManager
+        return try {
+            val appInfo = pm.getApplicationInfo(packageName, 0)
+            pm.getApplicationLabel(appInfo).toString()
+        } catch (_: PackageManager.NameNotFoundException) {
+            packageName.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+        }
+    }
+
+    private fun getCategory(packageName: String): Int {
+        return try {
+            applicationContext.packageManager.getApplicationInfo(packageName, 0).category
+        } catch (_: PackageManager.NameNotFoundException) {
+            -1
         }
     }
 
@@ -110,13 +222,5 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
             applicationContext.packageName
         )
         return mode == AppOpsManager.MODE_ALLOWED
-    }
-
-    private fun getAppInfo(packageName: String): ApplicationInfo? {
-        return try {
-            applicationContext.packageManager.getApplicationInfo(packageName, 0)
-        } catch (e: PackageManager.NameNotFoundException) {
-            null
-        }
     }
 }

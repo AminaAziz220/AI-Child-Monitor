@@ -27,13 +27,12 @@
         app:cardCornerRadius="60dp"
         app:cardElevation="8dp">
 
-        <!-- Changed from TextView to ImageView -->
         <ImageView
             android:id="@+id/emotionalAvatar"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:scaleType="centerCrop"
-            tools:src="@drawable/bou_medium" />
+            tools:src="@drawable/boy_happy" />
 
     </androidx.cardview.widget.CardView>
 
@@ -61,13 +60,44 @@
                 android:textStyle="bold"
                 android:layout_marginBottom="16dp" />
 
-            <TextView
-                android:layout_width="wrap_content"
+            <!-- New Date Navigation Bar -->
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Today's App Usage"
-                android:textColor="@color/primary_text_color"
-                android:textSize="18sp"
-                android:layout_marginBottom="16dp"/>
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:layout_marginBottom="16dp">
+
+                <ImageButton
+                    android:id="@+id/btnPrevDay"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Previous Day"
+                    android:src="@android:drawable/ic_media_previous"
+                    app:tint="@color/accent_color" />
+
+                <TextView
+                    android:id="@+id/usageDateLabel"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="Today"
+                    android:textColor="@color/primary_text_color"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <ImageButton
+                    android:id="@+id/btnNextDay"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Next Day"
+                    android:src="@android:drawable/ic_media_next"
+                    app:tint="@color/accent_color" />
+
+            </LinearLayout>
 
             <com.github.mikephil.charting.charts.BarChart
                 android:id="@+id/appUsageBarChart"

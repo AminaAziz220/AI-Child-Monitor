@@ -5,8 +5,9 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
+import android.widget.ArrayAdapter
 import android.widget.EditText
-import android.widget.RadioGroup
+import android.widget.Spinner
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -81,7 +82,14 @@ class ChildLoginActivity : AppCompatActivity() {
     private fun showChildDetailsDialog(parentId: String, pairingKeyRef: com.google.firebase.firestore.DocumentReference) {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_child_details, null)
         val nameEditText = dialogView.findViewById<EditText>(R.id.childNameEditText)
-        val genderRadioGroup = dialogView.findViewById<RadioGroup>(R.id.genderRadioGroup)
+        val ageEditText = dialogView.findViewById<EditText>(R.id.childAgeEditText)
+        val genderSpinner = dialogView.findViewById<Spinner>(R.id.genderSpinner)
+
+        // Populate the gender spinner
+        val genders = arrayOf("Boy", "Girl")
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, genders)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        genderSpinner.adapter = adapter
 
         AlertDialog.Builder(this)
             .setTitle("Enter Your Details")
@@ -89,13 +97,14 @@ class ChildLoginActivity : AppCompatActivity() {
             .setCancelable(false)
             .setPositiveButton("Confirm") { dialog, _ ->
                 val childName = nameEditText.text.toString().trim()
-                val selectedGenderId = genderRadioGroup.checkedRadioButtonId
-                val gender = if (selectedGenderId == R.id.boyRadioButton) "Boy" else if (selectedGenderId == R.id.girlRadioButton) "Girl" else ""
+                val childAgeStr = ageEditText.text.toString().trim()
+                val gender = genderSpinner.selectedItem.toString()
 
-                if (childName.isNotEmpty() && gender.isNotEmpty()) {
-                    createChildRecord(parentId, childName, gender, pairingKeyRef)
+                if (childName.isNotEmpty() && childAgeStr.isNotEmpty()) {
+                    val childAge = childAgeStr.toInt()
+                    createChildRecord(parentId, childName, childAge, gender, pairingKeyRef)
                 } else {
-                    Toast.makeText(this, "Please enter your name and select a gender.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Please enter your name and age.", Toast.LENGTH_SHORT).show()
                 }
                 dialog.dismiss()
             }
@@ -103,13 +112,16 @@ class ChildLoginActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun createChildRecord(parentId: String, childName: String, gender: String, pairingKeyRef: com.google.firebase.firestore.DocumentReference) {
+    private fun createChildRecord(parentId: String, childName: String, age: Int, gender: String, pairingKeyRef: com.google.firebase.firestore.DocumentReference) {
         val db = Firebase.firestore
         val childData = hashMapOf(
             "name" to childName,
+            "age" to age,
             "gender" to gender,
             "isPaired" to true,
-            "parentId" to parentId
+            "parentId" to parentId,
+            "riskLevel" to "Low",
+            "journalText" to "No entry yet."
         )
 
         db.collection("users").document(parentId).collection("children")
@@ -117,6 +129,7 @@ class ChildLoginActivity : AppCompatActivity() {
             .addOnSuccessListener { childDocRef ->
                 pairingKeyRef.delete()
                 
+                // Store IDs locally for the background service
                 val prefs = getSharedPreferences("AI_CHILD_MONITOR_PREFS", Context.MODE_PRIVATE).edit()
                 prefs.putString("PARENT_ID", parentId)
                 prefs.putString("CHILD_ID", childDocRef.id)
