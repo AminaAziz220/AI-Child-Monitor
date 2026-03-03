@@ -34,7 +34,6 @@ class ChildDashboardActivity : AppCompatActivity() {
     private var childAge: Int = 12
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
-    // Current navigation state (0 = Today, 1 = Yesterday, etc.)
     private var currentDaysOffset = 0
     private var cachedUsageByDate: Map<String, Any>? = null
     private var currentJournalText = ""
@@ -61,7 +60,7 @@ class ChildDashboardActivity : AppCompatActivity() {
         updateDateDisplay()
 
         binding.btnPrevDay.setOnClickListener {
-            if (currentDaysOffset < 6) { // Limit to 7 days (0 to 6)
+            if (currentDaysOffset < 6) {
                 currentDaysOffset++
                 updateDateDisplay()
                 refreshData()
@@ -90,7 +89,6 @@ class ChildDashboardActivity : AppCompatActivity() {
             else -> dateKey
         }
 
-        // Disable "Next" button if we are already at today
         binding.btnNextDay.isEnabled = currentDaysOffset > 0
         binding.btnNextDay.alpha = if (currentDaysOffset > 0) 1.0f else 0.3f
     }
@@ -157,6 +155,11 @@ class ChildDashboardActivity : AppCompatActivity() {
 
         val totalMinutes = (dayData["totalMinutes"] as? Number)?.toLong() ?: 0L
         val phoneChecks = (dayData["phoneChecks"] as? Number)?.toInt() ?: 0
+        
+        // New real data fields from worker
+        val nightUsageMinutes = (dayData["nightUsageMinutes"] as? Number)?.toDouble() ?: 0.0
+        val nightUsageRatio = (dayData["nightUsageRatio"] as? Number)?.toDouble() ?: 0.0
+        
         val topApps = (dayData["topApps"] as? List<Map<String, Any>>) ?: emptyList()
 
         val hours = totalMinutes / 60
@@ -206,7 +209,18 @@ class ChildDashboardActivity : AppCompatActivity() {
         val socialRatio = if (totalHours > 0) socialHours / totalHours else 0.0
         val engagementIntensity = totalHours * 50
 
-        sendRiskRequest(totalHours, socialHours, gamingHours, phoneChecks, entertainmentRatio, gamingRatio, socialRatio, engagementIntensity)
+        sendRiskRequest(
+            totalHours = totalHours,
+            socialHours = socialHours,
+            gamingHours = gamingHours,
+            phoneChecks = phoneChecks,
+            nightUsage = nightUsageMinutes,
+            nightRatio = nightUsageRatio,
+            entRatio = entertainmentRatio,
+            gameRatio = gamingRatio,
+            socRatio = socialRatio,
+            intensity = engagementIntensity
+        )
     }
 
     private fun updateAvatar(riskLevel: String, gender: String) {
@@ -228,16 +242,27 @@ class ChildDashboardActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendRiskRequest(totalHours: Double, socialHours: Double, gamingHours: Double, phoneChecks: Int, entRatio: Double, gameRatio: Double, socRatio: Double, intensity: Double) {
+    private fun sendRiskRequest(
+        totalHours: Double,
+        socialHours: Double,
+        gamingHours: Double,
+        phoneChecks: Int,
+        nightUsage: Double,
+        nightRatio: Double,
+        entRatio: Double,
+        gameRatio: Double,
+        socRatio: Double,
+        intensity: Double
+    ) {
         val json = JSONObject().apply {
             put("avg_screen_time", totalHours)
             put("social_media_hours", socialHours)
             put("gaming_hours", gamingHours)
-            put("night_usage", 2) 
+            put("night_usage", nightUsage) // Now using real data
             put("phone_checks_per_day", phoneChecks)
             put("Age", childAge)
             put("entertainment_ratio", entRatio)
-            put("night_usage_ratio", 0.28)
+            put("night_usage_ratio", nightRatio) // Now using real data
             put("engagement_intensity", intensity)
             put("gaming_ratio", gameRatio)
             put("social_ratio", socRatio)

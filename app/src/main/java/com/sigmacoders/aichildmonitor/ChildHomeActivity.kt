@@ -1,7 +1,7 @@
 package com.sigmacoders.aichildmonitor
 
 import android.app.AppOpsManager
-import android.app.usage.UsageStatsManager // <-- THE MISSING IMPORT
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -19,6 +19,7 @@ class ChildHomeActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityChildHomeBinding
     private val tag = "ChildHomeActivity"
+
     private var parentId: String? = null
     private var childId: String? = null
 
@@ -30,6 +31,8 @@ class ChildHomeActivity : AppCompatActivity() {
         parentId = intent.getStringExtra("PARENT_ID")
         childId = intent.getStringExtra("CHILD_ID")
 
+        Log.d(tag, "Parent=$parentId Child=$childId")
+
         binding.grantPermissionButton.setOnClickListener {
             requestUsageStatsPermission()
         }
@@ -37,34 +40,45 @@ class ChildHomeActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Check the permission state every time the user returns to this screen.
         updateUiAndScheduleWork()
     }
 
     private fun updateUiAndScheduleWork() {
-        if (hasUsageStatsPermission()) {
-            // Permission is granted, show the normal UI.
-            showGrantedState()
-            // Schedule the work if IDs are available.
-            if (parentId != null && childId != null) {
-                scheduleUsageStatsUpload(parentId!!, childId!!)
-            }
-        } else {
-            // Permission is not granted, show the permission request UI.
+
+        if (!hasUsageStatsPermission()) {
             showPermissionNeededState()
+            return
         }
+
+        showGrantedState()
+
+        if (parentId.isNullOrEmpty() || childId.isNullOrEmpty()) {
+            Log.e(tag, "IDs missing — cannot schedule worker")
+            return
+        }
+
+        scheduleUsageStatsUpload(parentId!!, childId!!)
     }
 
     private fun hasUsageStatsPermission(): Boolean {
         val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        val mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
-        if (mode == AppOpsManager.MODE_ALLOWED) {
+        val mode = appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            packageName
+        )
+
+        if (mode == AppOpsManager.MODE_ALLOWED)
             return true
-        }
-        // A fallback check for devices that fail to report MODE_ALLOWED correctly.
+
         return try {
-            val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-            val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, System.currentTimeMillis() - 1000 * 60, System.currentTimeMillis())
+            val usageStatsManager =
+                getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            val stats = usageStatsManager.queryUsageStats(
+                UsageStatsManager.INTERVAL_DAILY,
+                System.currentTimeMillis() - 60000,
+                System.currentTimeMillis()
+            )
             stats != null
         } catch (e: Exception) {
             false
@@ -90,6 +104,7 @@ class ChildHomeActivity : AppCompatActivity() {
     }
 
     private fun scheduleUsageStatsUpload(parentId: String, childId: String) {
+
         val workerData = workDataOf(
             "PARENT_ID" to parentId,
             "CHILD_ID" to childId
@@ -99,29 +114,38 @@ class ChildHomeActivity : AppCompatActivity() {
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
-        val immediateWorkRequest = OneTimeWorkRequestBuilder<UsageStatsWorker>()
-            .setConstraints(constraints)
-            .setInputData(workerData)
-            .build()
-
-        val periodicWorkRequest = PeriodicWorkRequestBuilder<UsageStatsWorker>(
-            1, TimeUnit.HOURS
-        )
-            .setConstraints(constraints)
-            .setInputData(workerData)
-            .build()
-
         val workManager = WorkManager.getInstance(applicationContext)
-        
-        workManager.enqueue(immediateWorkRequest)
-        Log.d(tag, "One-time usage stats upload worker has been enqueued.")
+
+        // 🔹 Immediate one-time execution (replace existing)
+        val immediateWork =
+            OneTimeWorkRequestBuilder<UsageStatsWorker>()
+                .setConstraints(constraints)
+                .setInputData(workerData)
+                .build()
+
+        workManager.enqueueUniqueWork(
+            "USAGE_STATS_IMMEDIATE",
+            ExistingWorkPolicy.REPLACE,
+            immediateWork
+        )
+
+        Log.d(tag, "Immediate worker scheduled")
+
+        // 🔹 Periodic execution (minimum allowed = 15 min)
+        val periodicWork =
+            PeriodicWorkRequestBuilder<UsageStatsWorker>(
+                15, TimeUnit.MINUTES
+            )
+                .setConstraints(constraints)
+                .setInputData(workerData)
+                .build()
 
         workManager.enqueueUniquePeriodicWork(
-            "USAGE_STATS_UPLOAD_WORK",
+            "USAGE_STATS_PERIODIC",
             ExistingPeriodicWorkPolicy.KEEP,
-            periodicWorkRequest
+            periodicWork
         )
 
-        Log.d(tag, "Periodic usage stats upload worker has been scheduled.")
+        Log.d(tag, "Periodic worker scheduled (15 min)")
     }
 }

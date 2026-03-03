@@ -12,7 +12,12 @@
           "package_name": "com.sigmacoders.aichildmonitor"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "675467675023-skee2asoe4ctmli73ebpj1ahsod3gmkh.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBhBMiVBBuModCrthK69mNcr1yFu87tNSo"
@@ -20,7 +25,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "675467675023-skee2asoe4ctmli73ebpj1ahsod3gmkh.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
