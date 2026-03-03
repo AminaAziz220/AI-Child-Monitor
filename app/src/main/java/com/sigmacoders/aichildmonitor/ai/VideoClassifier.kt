@@ -88,29 +88,22 @@ class VideoClassifier {
 
                     Log.i("CLASSIFICATION_RESULT", "Title: $title | Top: $topCategory | Safety: $safety")
 
-                    val timestamp = System.currentTimeMillis().toString()
-                    val data = hashMapOf(
-                        "title" to title,
-                        "channel" to channel,
-                        "category" to topCategory,
-                        "confidence" to topConfidence,
-                        "safety" to safety,
-                        "timestamp" to System.currentTimeMillis()
-                    )
+                    // ✅ ONLY SAVE IF UNSAFE & OVERWRITE WITH TIMESTAMP
+                    if (safety == "unsafe" && parentId.isNotEmpty() && childId.isNotEmpty()) {
+                        val lastUnsafeData = hashMapOf(
+                            "title" to title,
+                            "timestamp" to System.currentTimeMillis()
+                        )
 
-                    // ✅ OTHER WAY: Save as a map field inside the Child document (like usage data)
-                    if (parentId.isNotEmpty() && childId.isNotEmpty()) {
-                        val logEntry = hashMapOf(
-                            "videoLogs" to hashMapOf(
-                                timestamp to data
-                            )
+                        val update = hashMapOf(
+                            "lastUnsafeVideo" to lastUnsafeData
                         )
 
                         db.collection("users").document(parentId)
                             .collection("children").document(childId)
-                            .set(logEntry, SetOptions.merge()) // Using merge exactly like UsageStatsWorker
+                            .set(update, SetOptions.merge())
                             .addOnSuccessListener {
-                                Log.d("FIRESTORE_WRITE", "✅ SUCCESS! Log merged into child document.")
+                                Log.d("FIRESTORE_WRITE", "✅ SUCCESS! lastUnsafeVideo updated.")
                             }
                             .addOnFailureListener { e ->
                                 Log.e("FIRESTORE_WRITE", "❌ FAILED: ${e.message}")

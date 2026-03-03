@@ -38,7 +38,6 @@ class YouTubeAccessibilityService : AccessibilityService() {
             val prefs = getSharedPreferences("AI_CHILD_MONITOR_PREFS", Context.MODE_PRIVATE)
             val parentId = prefs.getString("PARENT_ID", null)
             val childId = prefs.getString("CHILD_ID", null)
-
             if (parentId != null && childId != null) {
                 YouTubeClassifierTrigger.classifyIfNeeded(
                     context = this,

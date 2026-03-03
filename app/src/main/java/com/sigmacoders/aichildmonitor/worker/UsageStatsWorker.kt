@@ -60,36 +60,24 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
     }
 
     private fun fetchDayUsage(dayCal: Calendar): Map<String, Any> {
-        val usageStatsManager = applicationContext.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-
         val startCal = dayCal.clone() as Calendar
         startCal.set(Calendar.HOUR_OF_DAY, 0)
         startCal.set(Calendar.MINUTE, 0)
         startCal.set(Calendar.SECOND, 0)
+        startCal.set(Calendar.MILLISECOND, 0)
         val startTime = startCal.timeInMillis
 
         val endCal = dayCal.clone() as Calendar
         endCal.set(Calendar.HOUR_OF_DAY, 23)
         endCal.set(Calendar.MINUTE, 59)
         endCal.set(Calendar.SECOND, 59)
+        endCal.set(Calendar.MILLISECOND, 999)
         val endTime = minOf(endCal.timeInMillis, System.currentTimeMillis())
 
-        // 1. Fetch Stats and Deduplicate using a Map
-        val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
-        val appMap = mutableMapOf<String, Long>() // PackageName -> Minutes
-
-        stats?.forEach { usageStat ->
-            if (usageStat.totalTimeInForeground > 0) {
-                val pkg = usageStat.packageName
-                val minutes = usageStat.totalTimeInForeground / (1000 * 60)
-                if (minutes > 0) {
-                    // Update map with max value to prevent duplicates
-                    appMap[pkg] = maxOf(appMap[pkg] ?: 0L, minutes)
-                }
-            }
-        }
+        val appMap = calculateUsageFromEvents(startTime, endTime)
 
         val topApps = appMap.entries
+            .filter { it.value > 0 }
             .sortedByDescending { it.value }
             .take(15)
             .map { entry ->
@@ -101,11 +89,17 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
             }
 
         val totalMinutes = appMap.values.sum()
-        val phoneChecks = calculatePhoneChecks(startTime, endTime)
-        val nightMinutes = calculateNightUsage(dayCal)
+        
+        // Use the same event logic for Night Usage (12 AM to 6 AM)
+        val nightEnd = startCal.clone() as Calendar
+        nightEnd.set(Calendar.HOUR_OF_DAY, 6)
+        val nightMap = calculateUsageFromEvents(startTime, minOf(nightEnd.timeInMillis, endTime))
+        val nightMinutes = nightMap.values.sum()
+        
         val nightRatio = if (totalMinutes > 0) nightMinutes.toDouble() / totalMinutes else 0.0
+        val phoneChecks = calculatePhoneChecks(startTime, endTime)
 
-        Log.d(tag, "Date: ${dateFormat.format(dayCal.time)} | Total: $totalMinutes min | Night: $nightMinutes min | Ratio: $nightRatio")
+        Log.d(tag, "Precise Stats for ${dateFormat.format(dayCal.time)}: Total=$totalMinutes, Night=$nightMinutes")
 
         return mapOf(
             "totalMinutes" to totalMinutes,
@@ -116,40 +110,38 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
         )
     }
 
-    private fun calculateNightUsage(dayCal: Calendar): Long {
+    private fun calculateUsageFromEvents(start: Long, end: Long): Map<String, Long> {
+        val usageStatsManager = applicationContext.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val events = usageStatsManager.queryEvents(start, end)
+        val event = UsageEvents.Event()
+        
+        val appMsMap = mutableMapOf<String, Long>()
+        val startTimes = mutableMapOf<String, Long>()
 
-        val usageStatsManager =
-            applicationContext.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-
-        val nightStart = dayCal.clone() as Calendar
-        nightStart.set(Calendar.HOUR_OF_DAY, 0)
-        nightStart.set(Calendar.MINUTE, 0)
-        nightStart.set(Calendar.SECOND, 0)
-
-        val nightEnd = dayCal.clone() as Calendar
-        nightEnd.set(Calendar.HOUR_OF_DAY, 6)
-        nightEnd.set(Calendar.MINUTE, 0)
-        nightEnd.set(Calendar.SECOND, 0)
-
-        val startTime = nightStart.timeInMillis
-        val endTime = minOf(nightEnd.timeInMillis, System.currentTimeMillis())
-
-        val stats = usageStatsManager.queryUsageStats(
-            UsageStatsManager.INTERVAL_DAILY,
-            startTime,
-            endTime
-        )
-
-        var totalNightMs = 0L
-
-        stats?.forEach { usageStat ->
-            val appTime = usageStat.totalTimeInForeground
-            if (appTime > 0) {
-                totalNightMs += appTime
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            val pkg = event.packageName
+            
+            if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) {
+                startTimes[pkg] = event.timeStamp
+            } else if (event.eventType == UsageEvents.Event.ACTIVITY_PAUSED || event.eventType == UsageEvents.Event.ACTIVITY_STOPPED) {
+                val startTime = startTimes.remove(pkg)
+                if (startTime != null) {
+                    val duration = event.timeStamp - startTime
+                    appMsMap[pkg] = (appMsMap[pkg] ?: 0L) + duration
+                }
+            }
+        }
+        
+        // Handle apps still open at the end of the query window
+        startTimes.forEach { (pkg, startTime) ->
+            val duration = end - startTime
+            if (duration > 0) {
+                appMsMap[pkg] = (appMsMap[pkg] ?: 0L) + duration
             }
         }
 
-        return totalNightMs / (1000 * 60)
+        return appMsMap.mapValues { it.value / (1000 * 60) }
     }
 
     private fun calculatePhoneChecks(start: Long, end: Long): Int {

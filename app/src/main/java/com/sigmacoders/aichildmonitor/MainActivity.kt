@@ -34,7 +34,6 @@ class MainActivity : AppCompatActivity() {
     private val lastProcessedTimestamp = mutableMapOf<String, Long>()
     private val sessionStartTime = System.currentTimeMillis()
 
-    // Permission launcher for Android 13+
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
@@ -139,15 +138,12 @@ class MainActivity : AppCompatActivity() {
                         parentId = userId
                     )
                     childrenList.add(child)
-                    
-                    // Start listening to the child document for new video logs
                     setupChildDocumentListener(child)
                 }
                 childrenAdapter.notifyDataSetChanged()
             }
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun setupChildDocumentListener(child: Child) {
         if (activeChildListeners.containsKey(child.id)) return
 
@@ -157,25 +153,18 @@ class MainActivity : AppCompatActivity() {
         val listener = childRef.addSnapshotListener { snapshot, e ->
             if (e != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
 
-            val videoLogs = snapshot.get("videoLogs") as? Map<String, Any> ?: return@addSnapshotListener
+            // ✅ FIXED: Look at the single field "lastUnsafeVideo" instead of videoLogs map
+            val lastLog = snapshot.get("lastUnsafeVideo") as? Map<String, Any> ?: return@addSnapshotListener
             
-            var latestUnsafeTitle: String? = null
-            var latestTimestamp = lastProcessedTimestamp[child.id] ?: sessionStartTime
-
-            videoLogs.forEach { (key, value) ->
-                val logData = value as? Map<String, Any> ?: return@forEach
-                val ts = logData["timestamp"] as? Long ?: 0L
-                val safety = logData["safety"] as? String ?: ""
-                
-                if (ts > latestTimestamp && safety == "unsafe") {
-                    latestTimestamp = ts
-                    latestUnsafeTitle = logData["title"] as? String
-                }
-            }
-
-            if (latestUnsafeTitle != null) {
-                lastProcessedTimestamp[child.id] = latestTimestamp
-                notificationHelper.showUnsafeContentAlert(child.name, latestUnsafeTitle!!)
+            val ts = lastLog["timestamp"] as? Long ?: 0L
+            val title = lastLog["title"] as? String ?: "Unknown Video"
+            
+            // Trigger alert only if timestamp is new
+            val lastProcessedTs = lastProcessedTimestamp[child.id] ?: sessionStartTime
+            
+            if (ts > lastProcessedTs) {
+                lastProcessedTimestamp[child.id] = ts
+                notificationHelper.showUnsafeContentAlert(child.name, title)
             }
         }
 
