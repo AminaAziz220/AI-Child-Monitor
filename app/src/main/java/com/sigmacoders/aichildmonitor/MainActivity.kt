@@ -21,6 +21,8 @@ import com.sigmacoders.aichildmonitor.adapter.ChildrenAdapter
 import com.sigmacoders.aichildmonitor.databinding.ActivityMainBinding
 import com.sigmacoders.aichildmonitor.model.Child
 import com.sigmacoders.aichildmonitor.utils.NotificationHelper
+import java.text.SimpleDateFormat
+import java.util.*
 
 class MainActivity : AppCompatActivity() {
 
@@ -31,14 +33,17 @@ class MainActivity : AppCompatActivity() {
     
     private lateinit var notificationHelper: NotificationHelper
     private val activeChildListeners = mutableMapOf<String, ListenerRegistration>()
-    private val lastProcessedTimestamp = mutableMapOf<String, Long>()
+    private val lastProcessedVideoTs = mutableMapOf<String, Long>()
     private val sessionStartTime = System.currentTimeMillis()
+    
+    private val limitAlertTriggeredToday = mutableMapOf<String, String>() // ChildId to Date string
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
+        Log.d(tag, "Notification permission result: $isGranted")
         if (!isGranted) {
-            Toast.makeText(this, "Notifications are disabled. You won't receive safety alerts.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Notifications disabled. You won't get safety alerts.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -66,7 +71,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            val status = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            if (status != PackageManager.PERMISSION_GRANTED) {
                 requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
@@ -98,25 +104,15 @@ class MainActivity : AppCompatActivity() {
     private fun generateAndSavePairingKey(userId: String) {
         val pairingKey = (1000..9999).random().toString()
         val db = Firebase.firestore
-
         val pairingRef = db.collection("pairingKeys").document(pairingKey)
-        val pairingData = hashMapOf("parentId" to userId)
-
-        pairingRef.set(pairingData)
-            .addOnSuccessListener {
-                Log.d(tag, "Pairing key created: $pairingKey")
-                showPairingKeyDialog(pairingKey)
-            }
-            .addOnFailureListener { e ->
-                Log.w(tag, "Error generating pairing key", e)
-                Toast.makeText(this, "Failed to generate pairing key.", Toast.LENGTH_SHORT).show()
-            }
+        pairingRef.set(hashMapOf("parentId" to userId))
+            .addOnSuccessListener { showPairingKeyDialog(pairingKey) }
     }
 
     private fun showPairingKeyDialog(pairingKey: String) {
         AlertDialog.Builder(this)
-            .setTitle("Your Pairing Key")
-            .setMessage("Share this key with your child to pair their device:\n\n$pairingKey")
+            .setTitle("Pairing Key")
+            .setMessage("Key: $pairingKey")
             .setPositiveButton("OK", null)
             .show()
     }
@@ -126,54 +122,57 @@ class MainActivity : AppCompatActivity() {
         db.collection("users").document(userId).collection("children")
             .whereEqualTo("isPaired", true)
             .addSnapshotListener { snapshots, e ->
-                if (e != null) {
-                    Log.w(tag, "Listen failed.", e)
-                    return@addSnapshotListener
-                }
-
+                if (e != null) return@addSnapshotListener
                 childrenList.clear()
                 snapshots?.forEach { doc ->
-                    val child = doc.toObject<Child>().copy(
-                        id = doc.id,
-                        parentId = userId
-                    )
+                    val child = doc.toObject<Child>().copy(id = doc.id, parentId = userId)
                     childrenList.add(child)
-                    setupChildDocumentListener(child)
+                    setupChildMonitor(child)
                 }
                 childrenAdapter.notifyDataSetChanged()
             }
     }
 
-    private fun setupChildDocumentListener(child: Child) {
+    @Suppress("UNCHECKED_CAST")
+    private fun setupChildMonitor(child: Child) {
         if (activeChildListeners.containsKey(child.id)) return
 
         val db = Firebase.firestore
         val childRef = db.collection("users").document(child.parentId).collection("children").document(child.id)
 
-        val listener = childRef.addSnapshotListener { snapshot, e ->
-            if (e != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+        val listener = childRef.addSnapshotListener { snapshot, _ ->
+            if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
 
-            // ✅ FIXED: Look at the single field "lastUnsafeVideo" instead of videoLogs map
-            val lastLog = snapshot.get("lastUnsafeVideo") as? Map<String, Any> ?: return@addSnapshotListener
-            
-            val ts = lastLog["timestamp"] as? Long ?: 0L
-            val title = lastLog["title"] as? String ?: "Unknown Video"
-            
-            // Trigger alert only if timestamp is new
-            val lastProcessedTs = lastProcessedTimestamp[child.id] ?: sessionStartTime
-            
-            if (ts > lastProcessedTs) {
-                lastProcessedTimestamp[child.id] = ts
-                notificationHelper.showUnsafeContentAlert(child.name, title)
+            // 1. Unsafe Videos
+            val lastLog = snapshot.get("lastUnsafeVideo") as? Map<String, Any>
+            if (lastLog != null) {
+                val ts = lastLog["timestamp"] as? Long ?: 0L
+                val title = lastLog["title"] as? String ?: "Unknown Video"
+                if (ts > (lastProcessedVideoTs[child.id] ?: sessionStartTime)) {
+                    lastProcessedVideoTs[child.id] = ts
+                    notificationHelper.showUnsafeContentAlert(child.name, title)
+                }
+            }
+
+            // 2. Screen Time Limit
+            val limit = snapshot.getLong("screenTimeLimit") ?: 0L
+            val usageByDate = snapshot.get("usageByDate") as? Map<String, Any>
+            val todayKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+            val todayData = usageByDate?.get(todayKey) as? Map<String, Any>
+            val totalToday = (todayData?.get("totalMinutes") as? Number)?.toLong() ?: 0L
+
+            if (limit > 0 && totalToday > limit) {
+                if (limitAlertTriggeredToday[child.id] != todayKey) {
+                    limitAlertTriggeredToday[child.id] = todayKey
+                    notificationHelper.showScreenTimeLimitAlert(child.name, totalToday, limit)
+                }
             }
         }
-
         activeChildListeners[child.id] = listener
     }
 
     override fun onDestroy() {
         super.onDestroy()
         activeChildListeners.values.forEach { it.remove() }
-        activeChildListeners.clear()
     }
 }

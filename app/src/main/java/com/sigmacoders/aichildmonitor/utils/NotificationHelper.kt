@@ -8,12 +8,11 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.sigmacoders.aichildmonitor.MainActivity
-import com.sigmacoders.aichildmonitor.R
 
 class NotificationHelper(private val context: Context) {
 
     private val CHANNEL_ID = "unsafe_content_channel"
-    private val CHANNEL_NAME = "Unsafe Content Alerts"
+    private val CHANNEL_NAME = "AI Child Monitor Alerts"
 
     init {
         createNotificationChannel()
@@ -23,7 +22,7 @@ class NotificationHelper(private val context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val importance = NotificationManager.IMPORTANCE_HIGH
             val channel = NotificationChannel(CHANNEL_ID, CHANNEL_NAME, importance).apply {
-                description = "Alerts parents when unsafe content is detected"
+                description = "Alerts parents when unsafe content or limits are reached"
             }
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
@@ -35,14 +34,35 @@ class NotificationHelper(private val context: Context) {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
         val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
+            context, System.currentTimeMillis().toInt(), intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert) // Replace with your app icon
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle("Unsafe Content Warning!")
             .setContentText("$childName just watched an unsafe video: $videoTitle")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(System.currentTimeMillis().toInt(), builder.build())
+    }
+
+    fun showScreenTimeLimitAlert(childName: String, currentMinutes: Long, limit: Long) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, System.currentTimeMillis().toInt(), intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
+            .setContentTitle("Screen Time Limit Reached!")
+            .setContentText("$childName has exceeded the limit ($currentMinutes / $limit min).")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)

@@ -3,6 +3,7 @@ package com.sigmacoders.aichildmonitor
 import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.util.Log
+import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -54,6 +55,40 @@ class ChildDashboardActivity : AppCompatActivity() {
 
         setupNavigation()
         setupFirestoreListener(parentId!!, childId!!)
+        
+        binding.setLimitButton.setOnClickListener {
+            showSetLimitDialog()
+        }
+    }
+
+    private fun showSetLimitDialog() {
+        val input = EditText(this)
+        input.hint = "Enter limit in minutes (e.g. 120)"
+        input.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+
+        AlertDialog.Builder(this)
+            .setTitle("Set Daily Screen Time Limit")
+            .setMessage("The parent will be notified if the child exceeds this many minutes today.")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val limitStr = input.text.toString()
+                if (limitStr.isNotEmpty()) {
+                    val limitMinutes = limitStr.toLong()
+                    saveLimitToFirestore(limitMinutes)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun saveLimitToFirestore(minutes: Long) {
+        if (parentId != null && childId != null) {
+            Firebase.firestore.collection("users").document(parentId!!).collection("children").document(childId!!)
+                .update("screenTimeLimit", minutes)
+                .addOnSuccessListener {
+                    Toast.makeText(this, "Limit set to $minutes minutes.", Toast.LENGTH_SHORT).show()
+                }
+        }
     }
 
     private fun setupNavigation() {
@@ -120,6 +155,14 @@ class ChildDashboardActivity : AppCompatActivity() {
                 childAge = snapshot.getLong("age")?.toInt() ?: 12
                 currentJournalText = snapshot.getString("journalText") ?: getString(R.string.no_journal_entry)
 
+                // Display screen time limit if it exists
+                val limit = snapshot.getLong("screenTimeLimit")
+                if (limit != null) {
+                    binding.limitTextView.text = getString(R.string.limit_min, limit)
+                } else {
+                    binding.limitTextView.text = getString(R.string.limit_not_set)
+                }
+
                 binding.childNameTextView.text = childName
                 binding.riskLevelValue.text = getString(R.string.risk_level, riskLevelString)
                 updateAvatar(riskLevelString, childGender)
@@ -147,7 +190,7 @@ class ChildDashboardActivity : AppCompatActivity() {
         val dayData = usageByDate[dateKey] as? Map<String, Any>
 
         if (dayData == null) {
-            binding.totalTimeTextView.text = "No data for this day"
+            binding.totalTimeTextView.text = getString(R.string.no_data_day)
             binding.appUsageBarChart.clear()
             binding.appUsageBarChart.invalidate()
             return
@@ -156,7 +199,6 @@ class ChildDashboardActivity : AppCompatActivity() {
         val totalMinutes = (dayData["totalMinutes"] as? Number)?.toLong() ?: 0L
         val phoneChecks = (dayData["phoneChecks"] as? Number)?.toInt() ?: 0
         
-        // New real data fields from worker
         val nightUsageMinutes = (dayData["nightUsageMinutes"] as? Number)?.toDouble() ?: 0.0
         val nightUsageRatio = (dayData["nightUsageRatio"] as? Number)?.toDouble() ?: 0.0
         
@@ -164,7 +206,7 @@ class ChildDashboardActivity : AppCompatActivity() {
 
         val hours = totalMinutes / 60
         val minutes = totalMinutes % 60
-        binding.totalTimeTextView.text = getString(R.string.total_today, hours, minutes)
+        binding.totalTimeTextView.text = getString(R.string.total_hm, hours, minutes)
 
         var socialMinutes = 0L
         var gamingMinutes = 0L
@@ -258,11 +300,11 @@ class ChildDashboardActivity : AppCompatActivity() {
             put("avg_screen_time", totalHours)
             put("social_media_hours", socialHours)
             put("gaming_hours", gamingHours)
-            put("night_usage", nightUsage) // Now using real data
+            put("night_usage", nightUsage) 
             put("phone_checks_per_day", phoneChecks)
             put("Age", childAge)
             put("entertainment_ratio", entRatio)
-            put("night_usage_ratio", nightRatio) // Now using real data
+            put("night_usage_ratio", nightRatio) 
             put("engagement_intensity", intensity)
             put("gaming_ratio", gameRatio)
             put("social_ratio", socRatio)
@@ -302,7 +344,7 @@ class ChildDashboardActivity : AppCompatActivity() {
     }
 
     private fun setupBarChart(entries: ArrayList<BarEntry>, labels: ArrayList<String>) {
-        val dataSet = BarDataSet(entries, getString(R.string.app_usage_in_minutes))
+        val dataSet = BarDataSet(entries, "App Usage (min)")
         dataSet.color = "#673AB7".toColorInt()
         val barData = BarData(dataSet)
         barData.barWidth = 0.5f
