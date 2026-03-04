@@ -24,6 +24,29 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
     private val tag = "UsageStatsWorker"
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
+    // Packages to exclude from usage tracking
+    private val excludedPackages by lazy {
+        setOf(
+            applicationContext.packageName,              // AI Child Monitor itself
+            "com.android.launcher",                      // Generic launcher
+            "com.android.launcher2",
+            "com.android.launcher3",
+            "com.miui.home",                             // Xiaomi
+            "com.sec.android.app.launcher",              // Samsung
+            "com.google.android.apps.nexuslauncher",     // Pixel
+            "com.huawei.android.launcher",               // Huawei
+            "com.oppo.launcher",                         // Oppo
+            "com.vivo.launcher",                         // Vivo
+            "com.realme.launcher",                       // Realme
+            "com.oneplus.launcher",                      // OnePlus
+            "com.android.systemui",                      // System UI
+            "com.android.settings",                      // Settings
+            "com.android.keyguard",                      // Lock screen
+            "com.android.inputmethod.latin",             // Keyboard
+            "com.google.android.inputmethod.latin"       // Gboard
+        )
+    }
+
     override suspend fun doWork(): Result {
         val parentId = inputData.getString("PARENT_ID")
         val childId = inputData.getString("CHILD_ID")
@@ -89,13 +112,13 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
             }
 
         val totalMinutes = appMap.values.sum()
-        
-        // Use the same event logic for Night Usage (12 AM to 6 AM)
+
+        // Night Usage: 12 AM to 6 AM
         val nightEnd = startCal.clone() as Calendar
         nightEnd.set(Calendar.HOUR_OF_DAY, 6)
         val nightMap = calculateUsageFromEvents(startTime, minOf(nightEnd.timeInMillis, endTime))
         val nightMinutes = nightMap.values.sum()
-        
+
         val nightRatio = if (totalMinutes > 0) nightMinutes.toDouble() / totalMinutes else 0.0
         val phoneChecks = calculatePhoneChecks(startTime, endTime)
 
@@ -114,17 +137,22 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
         val usageStatsManager = applicationContext.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val events = usageStatsManager.queryEvents(start, end)
         val event = UsageEvents.Event()
-        
+
         val appMsMap = mutableMapOf<String, Long>()
         val startTimes = mutableMapOf<String, Long>()
 
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             val pkg = event.packageName
-            
+
+            // Skip excluded packages (own app, launchers, system apps)
+            if (pkg in excludedPackages) continue
+
             if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) {
                 startTimes[pkg] = event.timeStamp
-            } else if (event.eventType == UsageEvents.Event.ACTIVITY_PAUSED || event.eventType == UsageEvents.Event.ACTIVITY_STOPPED) {
+            } else if (event.eventType == UsageEvents.Event.ACTIVITY_PAUSED ||
+                event.eventType == UsageEvents.Event.ACTIVITY_STOPPED
+            ) {
                 val startTime = startTimes.remove(pkg)
                 if (startTime != null) {
                     val duration = event.timeStamp - startTime
@@ -132,7 +160,7 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
                 }
             }
         }
-        
+
         // Handle apps still open at the end of the query window
         startTimes.forEach { (pkg, startTime) ->
             val duration = end - startTime
@@ -156,24 +184,30 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
         return count
     }
 
-    private suspend fun flushOldData(childRef: com.google.firebase.firestore.DocumentReference, activeKeys: List<String>) {
+    private suspend fun flushOldData(
+        childRef: com.google.firebase.firestore.DocumentReference,
+        activeKeys: List<String>
+    ) {
         try {
             val snapshot = childRef.get().await()
             @Suppress("UNCHECKED_CAST")
             val usageByDate = snapshot.get("usageByDate") as? Map<String, Any> ?: return
-            val keysToDelete = usageByDate.keys.filter { key -> key != "lastUpdated" && !activeKeys.contains(key) }
+            val keysToDelete = usageByDate.keys.filter { key ->
+                key != "lastUpdated" && !activeKeys.contains(key)
+            }
             if (keysToDelete.isNotEmpty()) {
                 val updates = keysToDelete.associate { "usageByDate.$it" to FieldValue.delete() }
                 childRef.update(updates).await()
             }
-        } catch (e: Exception) { Log.e(tag, "Error flushing old data", e) }
+        } catch (e: Exception) {
+            Log.e(tag, "Error flushing old data", e)
+        }
     }
 
     private fun getAppName(packageName: String): String {
-        val pm = applicationContext.packageManager
         return try {
-            val appInfo = pm.getApplicationInfo(packageName, 0)
-            pm.getApplicationLabel(appInfo).toString()
+            val appInfo = applicationContext.packageManager.getApplicationInfo(packageName, 0)
+            applicationContext.packageManager.getApplicationLabel(appInfo).toString()
         } catch (_: Exception) {
             packageName.substringAfterLast('.').replaceFirstChar { it.uppercase() }
         }
@@ -182,12 +216,18 @@ class UsageStatsWorker(appContext: Context, workerParams: WorkerParameters) :
     private fun getCategory(packageName: String): Int {
         return try {
             applicationContext.packageManager.getApplicationInfo(packageName, 0).category
-        } catch (_: Exception) { -1 }
+        } catch (_: Exception) {
+            -1
+        }
     }
 
     private fun hasUsageStatsPermission(): Boolean {
         val appOps = applicationContext.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        val mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), applicationContext.packageName)
+        val mode = appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            applicationContext.packageName
+        )
         return mode == AppOpsManager.MODE_ALLOWED
     }
 }
