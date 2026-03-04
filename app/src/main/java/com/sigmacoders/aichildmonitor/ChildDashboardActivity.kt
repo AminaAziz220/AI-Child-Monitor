@@ -12,6 +12,9 @@ import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.BarData
 import com.github.mikephil.charting.data.BarDataSet
 import com.github.mikephil.charting.data.BarEntry
+import com.github.mikephil.charting.data.Entry
+import com.github.mikephil.charting.data.LineData
+import com.github.mikephil.charting.data.LineDataSet
 import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
@@ -55,7 +58,7 @@ class ChildDashboardActivity : AppCompatActivity() {
 
         setupNavigation()
         setupFirestoreListener(parentId!!, childId!!)
-        
+
         binding.setLimitButton.setOnClickListener {
             showSetLimitDialog()
         }
@@ -132,9 +135,9 @@ class ChildDashboardActivity : AppCompatActivity() {
         val calendar = Calendar.getInstance()
         calendar.add(Calendar.DAY_OF_YEAR, -currentDaysOffset)
         val dateKey = dateFormat.format(calendar.time)
-        
-        cachedUsageByDate?.let { 
-            renderUsageForDate(it, dateKey) 
+
+        cachedUsageByDate?.let {
+            renderUsageForDate(it, dateKey)
         }
     }
 
@@ -169,8 +172,23 @@ class ChildDashboardActivity : AppCompatActivity() {
 
                 @Suppress("UNCHECKED_CAST")
                 val usageByDate = snapshot.get("usageByDate") as? Map<String, Any>
+
                 if (usageByDate != null) {
                     cachedUsageByDate = usageByDate
+
+                    // Weekly trend chart (new feature)
+                    renderWeeklyTrend(usageByDate)
+
+                    // Weekly risk (new feature)
+                    val weeklyRisk = computeWeeklyRisk(usageByDate)
+                    binding.weeklyRiskText.text = "Weekly Risk: $weeklyRisk"
+
+                    Firebase.firestore.collection("users")
+                        .document(parentId)
+                        .collection("children")
+                        .document(childId)
+                        .update("weeklyRiskLevel", weeklyRisk)
+
                     refreshData()
                 }
             }
@@ -182,6 +200,101 @@ class ChildDashboardActivity : AppCompatActivity() {
                 .setMessage(currentJournalText)
                 .setPositiveButton(getString(R.string.close), null)
                 .show()
+        }
+    }
+
+    private fun computeWeeklyRisk(usageByDate: Map<String, Any>): String {
+
+        var totalMinutes = 0.0
+        var totalNightMinutes = 0.0
+        var totalPhoneChecks = 0
+        var daysCount = 0
+
+        val calendar = Calendar.getInstance()
+        calendar.firstDayOfWeek = Calendar.SUNDAY
+        calendar.set(Calendar.DAY_OF_WEEK, Calendar.SUNDAY)
+
+        val weekStart = calendar.clone() as Calendar
+        val today = Calendar.getInstance()
+
+        while (!weekStart.after(today)) {
+
+            val key = dateFormat.format(weekStart.time)
+            val dayData = usageByDate[key] as? Map<String, Any>
+
+            if (dayData != null) {
+                val minutes = (dayData["totalMinutes"] as? Number)?.toDouble() ?: 0.0
+                val night = (dayData["nightUsageMinutes"] as? Number)?.toDouble() ?: 0.0
+                val checks = (dayData["phoneChecks"] as? Number)?.toInt() ?: 0
+
+                totalMinutes += minutes
+                totalNightMinutes += night
+                totalPhoneChecks += checks
+                daysCount++
+            }
+
+            weekStart.add(Calendar.DAY_OF_YEAR, 1)
+        }
+
+        if (daysCount == 0) return "Low"
+
+        val avgDailyHours = (totalMinutes / daysCount) / 60.0
+        val nightRatio = if (totalMinutes > 0) totalNightMinutes / totalMinutes else 0.0
+        val avgChecks = totalPhoneChecks / daysCount.toDouble()
+
+        val usageScore = avgDailyHours / 6.0
+        val nightScore = nightRatio
+        val checkScore = avgChecks / 80.0
+
+        val riskScore = 0.5 * usageScore + 0.3 * nightScore + 0.2 * checkScore
+
+        return when {
+            riskScore < 0.33 -> "Low"
+            riskScore < 0.66 -> "Medium"
+            else -> "High"
+        }
+    }
+
+    private fun renderWeeklyTrend(usageByDate: Map<String, Any>) {
+
+        val entries = ArrayList<Entry>()
+        val labels = ArrayList<String>()
+
+        val calendar = Calendar.getInstance()
+        calendar.firstDayOfWeek = Calendar.SUNDAY
+        calendar.set(Calendar.DAY_OF_WEEK, Calendar.SUNDAY)
+
+        val today = Calendar.getInstance()
+        var index = 0
+
+        while (!calendar.after(today)) {
+
+            val key = dateFormat.format(calendar.time)
+            val dayData = usageByDate[key] as? Map<String, Any>
+            val minutes = (dayData?.get("totalMinutes") as? Number)?.toFloat() ?: 0f
+
+            entries.add(Entry(index.toFloat(), minutes))
+            labels.add(SimpleDateFormat("EEE", Locale.US).format(calendar.time))
+
+            calendar.add(Calendar.DAY_OF_YEAR, 1)
+            index++
+        }
+
+        val dataSet = LineDataSet(entries, "Weekly Screen Time")
+        dataSet.lineWidth = 3f
+        dataSet.circleRadius = 4f
+        dataSet.color = "#673AB7".toColorInt()
+        dataSet.setCircleColor("#673AB7".toColorInt())
+
+        val data = LineData(dataSet)
+
+        binding.weeklyTrendChart.apply {
+            this.data = data
+            xAxis.valueFormatter = IndexAxisValueFormatter(labels)
+            xAxis.position = XAxis.XAxisPosition.BOTTOM
+            axisRight.isEnabled = false
+            description.isEnabled = false
+            invalidate()
         }
     }
 
@@ -198,10 +311,10 @@ class ChildDashboardActivity : AppCompatActivity() {
 
         val totalMinutes = (dayData["totalMinutes"] as? Number)?.toLong() ?: 0L
         val phoneChecks = (dayData["phoneChecks"] as? Number)?.toInt() ?: 0
-        
+
         val nightUsageMinutes = (dayData["nightUsageMinutes"] as? Number)?.toDouble() ?: 0.0
         val nightUsageRatio = (dayData["nightUsageRatio"] as? Number)?.toDouble() ?: 0.0
-        
+
         val topApps = (dayData["topApps"] as? List<Map<String, Any>>) ?: emptyList()
 
         val hours = totalMinutes / 60
@@ -300,11 +413,11 @@ class ChildDashboardActivity : AppCompatActivity() {
             put("avg_screen_time", totalHours)
             put("social_media_hours", socialHours)
             put("gaming_hours", gamingHours)
-            put("night_usage", nightUsage) 
+            put("night_usage", nightUsage)
             put("phone_checks_per_day", phoneChecks)
             put("Age", childAge)
             put("entertainment_ratio", entRatio)
-            put("night_usage_ratio", nightRatio) 
+            put("night_usage_ratio", nightRatio)
             put("engagement_intensity", intensity)
             put("gaming_ratio", gameRatio)
             put("social_ratio", socRatio)
@@ -326,7 +439,10 @@ class ChildDashboardActivity : AppCompatActivity() {
                     val jsonResp = JSONObject(responseBody)
                     val riskLevelInt = jsonResp.optInt("risk_level", 0)
                     val riskLevelString = when (riskLevelInt) {
-                        0 -> "Low" 1 -> "Medium" 2 -> "High" else -> "Low"
+                        0 -> "Low"
+                        1 -> "Medium"
+                        2 -> "High"
+                        else -> "Low"
                     }
 
                     if (parentId != null && childId != null) {
