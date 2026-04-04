@@ -36,11 +36,14 @@ class ChildDashboardActivity : AppCompatActivity() {
     private val client = OkHttpClient()
     private var childGender: String = "Boy"
     private var childAge: Int = 12
+    private var childName: String = "Child"
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
     private var currentDaysOffset = 0
     private var cachedUsageByDate: Map<String, Any>? = null
     private var currentJournalText = ""
+    private var currentRiskLevel = "Low"
+    private val attemptedDates = mutableSetOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -152,7 +155,7 @@ class ChildDashboardActivity : AppCompatActivity() {
             }
 
             if (snapshot != null && snapshot.exists()) {
-                val childName = snapshot.getString("name") ?: "Child"
+                childName = snapshot.getString("name") ?: "Child"
                 val riskLevelString = snapshot.getString("riskLevel") ?: "Low"
                 childGender = snapshot.getString("gender") ?: "Boy"
                 childAge = snapshot.getLong("age")?.toInt() ?: 12
@@ -195,8 +198,9 @@ class ChildDashboardActivity : AppCompatActivity() {
         }
 
         binding.journalButton.setOnClickListener {
+            val title = if (currentDaysOffset == 0) "Today's Wellness Journal" else "${binding.usageDateLabel.text}'s Wellness Journal"
             AlertDialog.Builder(this)
-                .setTitle(getString(R.string.todays_journal_entry))
+                .setTitle(title)
                 .setMessage(currentJournalText)
                 .setPositiveButton(getString(R.string.close), null)
                 .show()
@@ -306,6 +310,8 @@ class ChildDashboardActivity : AppCompatActivity() {
             binding.totalTimeTextView.text = getString(R.string.no_data_day)
             binding.appUsageBarChart.clear()
             binding.appUsageBarChart.invalidate()
+            currentJournalText = "No data available for this date."
+            binding.riskLevelValue.text = getString(R.string.risk_level, "N/A")
             return
         }
 
@@ -316,6 +322,13 @@ class ChildDashboardActivity : AppCompatActivity() {
         val nightUsageRatio = (dayData["nightUsageRatio"] as? Number)?.toDouble() ?: 0.0
 
         val topApps = (dayData["topApps"] as? List<Map<String, Any>>) ?: emptyList()
+
+        // Load persisted risk & journal from Firestore day data (written back by Flask)
+        currentRiskLevel = dayData["riskLevel"] as? String ?: "Calculating..."
+        currentJournalText = dayData["journalText"] as? String ?: "Analyzing usage patterns..."
+
+        binding.riskLevelValue.text = getString(R.string.risk_level, currentRiskLevel)
+        updateAvatar(currentRiskLevel, childGender)
 
         val hours = totalMinutes / 60
         val minutes = totalMinutes % 60
@@ -341,7 +354,7 @@ class ChildDashboardActivity : AppCompatActivity() {
                     name.contains("snapchat") || name.contains("tiktok")
             val isGamingManual = name.contains("pubg") || name.contains("free fire") ||
                     name.contains("cod") || name.contains("minecraft") ||
-                    name.contains("roblox") || name.contains("hungryshark")
+                    name.contains("roblox") || name.contains("hungryshark") || name.contains("juggle")
 
             if (isSocialManual || category == ApplicationInfo.CATEGORY_SOCIAL || category == ApplicationInfo.CATEGORY_VIDEO) {
                 socialMinutes += usageMinutesLong
@@ -362,42 +375,200 @@ class ChildDashboardActivity : AppCompatActivity() {
         val entertainmentRatio = if (totalHours > 0) (socialHours + gamingHours) / totalHours else 0.0
         val gamingRatio = if (totalHours > 0) gamingHours / totalHours else 0.0
         val socialRatio = if (totalHours > 0) socialHours / totalHours else 0.0
-        val engagementIntensity = totalHours * 50
 
-        sendRiskRequest(
-            totalHours = totalHours,
-            socialHours = socialHours,
-            gamingHours = gamingHours,
-            phoneChecks = phoneChecks,
-            nightUsage = nightUsageMinutes,
-            nightRatio = nightUsageRatio,
-            entRatio = entertainmentRatio,
-            gameRatio = gamingRatio,
-            socRatio = socialRatio,
-            intensity = engagementIntensity
-        )
-    }
+        // Journal generation logic: only call Flask if we don't have a real journal yet
+        val isLocalFallback = currentJournalText.startsWith("Digital Narrative")
+        val isPythonFallback = currentJournalText.startsWith("Today's usage summary shows")
+        val isPlaceholder = currentJournalText == "Analyzing usage patterns..." || currentJournalText.isEmpty()
 
-    private fun updateAvatar(riskLevel: String, gender: String) {
-        val level = riskLevel.lowercase()
-        if (gender == "Girl") {
-            when (level) {
-                "low" -> binding.emotionalAvatar.setImageResource(R.drawable.girl_smile)
-                "medium" -> binding.emotionalAvatar.setImageResource(R.drawable.girl_mid)
-                "high" -> binding.emotionalAvatar.setImageResource(R.drawable.girl_sad)
-                else -> binding.emotionalAvatar.setImageResource(R.drawable.girl_mid)
-            }
-        } else {
-            when (level) {
-                "low" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_smile)
-                "medium" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_mid)
-                "high" -> binding.emotionalAvatar.setImageResource(R.drawable.boy_sad)
-                else -> binding.emotionalAvatar.setImageResource(R.drawable.boy_mid)
-            }
+        val needsRealJournal = isLocalFallback || isPythonFallback || isPlaceholder
+
+        if (needsRealJournal && !attemptedDates.contains(dateKey)) {
+            attemptedDates.add(dateKey)
+            // Show a local fallback immediately so the screen isn't blank
+            currentJournalText = generateEnhancedJournal(totalMinutes, topApps, phoneChecks, nightUsageMinutes, "Low (Initial)", socialMinutes, gamingMinutes)
+            // Fire network request to Flask/Gemini
+            sendRiskRequest(
+                dk = dateKey,
+                tm = totalMinutes,
+                ta = topApps,
+                totalHours = totalHours,
+                socialHours = socialHours,
+                gamingHours = gamingHours,
+                phoneChecks = phoneChecks,
+                nightUsage = nightUsageMinutes,
+                nightRatio = nightUsageRatio,
+                socialMin = socialMinutes,
+                gamingMin = gamingMinutes
+            )
+        } else if (!needsRealJournal) {
+            // Already have a real AI journal — still update ML risk via original endpoint
+            sendRiskRequestLegacy(
+                totalHours = totalHours,
+                socialHours = socialHours,
+                gamingHours = gamingHours,
+                phoneChecks = phoneChecks,
+                nightUsage = nightUsageMinutes,
+                nightRatio = nightUsageRatio,
+                entRatio = entertainmentRatio,
+                gameRatio = gamingRatio,
+                socRatio = socialRatio,
+                intensity = totalHours * 50
+            )
         }
     }
 
+    private fun generateEnhancedJournal(
+        totalMinutes: Long,
+        topApps: List<Map<String, Any>>,
+        phoneChecks: Int,
+        nightMinutes: Double,
+        riskLevel: String,
+        socialMinutes: Long,
+        gamingMinutes: Long
+    ): String {
+        val h = totalMinutes / 60
+        val m = totalMinutes % 60
+        val topAppMap = topApps.firstOrNull()
+        val topAppName = topAppMap?.get("appName") as? String ?: "various apps"
+
+        val journal = StringBuilder()
+
+        journal.append("Digital Narrative\n")
+        journal.append("-----------------\n")
+        journal.append("$childName spent ${h}h ${m}m on the phone today. ")
+        journal.append("They reached for their device $phoneChecks times, with \"$topAppName\" being their favorite destination. ")
+
+        if (nightMinutes > 15) {
+            journal.append("Notably, ${nightMinutes.toInt()} minutes of usage happened late at night, which might be impacting their sleep quality. ")
+        } else {
+            journal.append("Great news! There was almost no activity during sleep hours. ")
+        }
+
+        journal.append("\n\nRisk Analysis: $riskLevel\n")
+        journal.append("-----------------\n")
+        val cleanRisk = riskLevel.split(" ").first()
+        when (cleanRisk) {
+            "Low" -> journal.append("Healthy balance! The digital footprint looks stable and age-appropriate.")
+            "Medium" -> journal.append("Caution: Screen time is creeping up. The frequency of checks suggests a growing dependency.")
+            "High" -> journal.append("Alert: Critical usage detected. The combination of high screen time and $phoneChecks checks points toward potential digital burnout.")
+            else -> journal.append("Assessing usage patterns based on screen time and app categories.")
+        }
+
+        journal.append("\n\nParenting Prompts (Tailored Advice:)\n")
+        journal.append("-----------------\n")
+
+        val prompts = mutableListOf<String>()
+
+        if (nightMinutes > 30) {
+            prompts.add("1. \"I noticed you were using your phone late last night. Was everything okay, or did you just lose track of time?\"")
+            prompts.add("2. \"How about we set a 'digital sunset' where all devices go to sleep at 9 PM tonight?\"")
+        } else if (phoneChecks > 60) {
+            prompts.add("1. \"You checked your phone quite often today ($phoneChecks times!). Did you feel like you were waiting for something important?\"")
+            prompts.add("2. \"Let's try a challenge: can we go for a walk together without either of us checking our phones?\"")
+        } else if (gamingMinutes > socialMinutes && gamingMinutes > 120) {
+            prompts.add("1. \"That was quite a gaming session today! What's the most challenging part of $topAppName right now?\"")
+            prompts.add("2. \"I'd love to see you play for a bit. Want to show me how it works?\"")
+        } else if (socialMinutes > gamingMinutes && socialMinutes > 120) {
+            prompts.add("1. \"You spent a lot of time on social media today. Did you see anything that made you laugh or feel inspired?\"")
+            prompts.add("2. \"Sometimes social media can feel a bit overwhelming. Do you ever feel like you need a break from it?\"")
+        } else if (totalMinutes > 360) {
+            prompts.add("1. \"Today was a big screen day ($h hours!). How do your eyes and head feel right now?\"")
+            prompts.add("2. \"Let's pick one offline activity we can both do tomorrow to balance out the screen time.\"")
+        } else {
+            prompts.add("1. \"You did a great job managing your time today! What was the highlight of your day?\"")
+            prompts.add("2. \"Is there any new app or hobby you've been curious about lately?\"")
+        }
+
+        prompts.forEach { journal.append(it).append("\n") }
+
+        return journal.toString()
+    }
+
+    // New sendRiskRequest: calls /analyze, handles AI journal from Flask/Gemini
     private fun sendRiskRequest(
+        dk: String,
+        tm: Long,
+        ta: List<Map<String, Any>>,
+        totalHours: Double,
+        socialHours: Double,
+        gamingHours: Double,
+        phoneChecks: Int,
+        nightUsage: Double,
+        nightRatio: Double,
+        socialMin: Long,
+        gamingMin: Long
+    ) {
+        val intensity = totalHours * 50
+        val er = if (totalHours > 0) (socialHours + gamingHours) / totalHours else 0.0
+        val gr = if (totalHours > 0) gamingHours / totalHours else 0.0
+        val sr = if (totalHours > 0) socialHours / totalHours else 0.0
+
+        val json = JSONObject().apply {
+            put("avg_screen_time", totalHours)
+            put("social_media_hours", socialHours)
+            put("gaming_hours", gamingHours)
+            put("night_usage", nightUsage)
+            put("phone_checks_per_day", phoneChecks)
+            put("Age", childAge)
+            put("entertainment_ratio", er)
+            put("night_usage_ratio", nightRatio)
+            put("engagement_intensity", intensity)
+            put("gaming_ratio", gr)
+            put("social_ratio", sr)
+        }
+
+        val request = Request.Builder()
+            .url("http://10.0.2.2:5000/analyze")
+            .post(json.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e("API_ERROR", "Failed to connect to /analyze: ${e.message}")
+                val estimatedRisk = if (totalHours > 6) "High (Est.)" else if (totalHours > 3) "Medium (Est.)" else "Low (Est.)"
+                val fallbackJournal = generateEnhancedJournal(tm, ta, phoneChecks, nightUsage, estimatedRisk, socialMin, gamingMin)
+                runOnUiThread {
+                    updateCurrentViewIfMatch(dk, fallbackJournal, estimatedRisk)
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val body = response.body?.string()
+                Log.d("API_RESPONSE", "ML /analyze response: $body")
+
+                if (response.isSuccessful && body != null) {
+                    val jsonResp = JSONObject(body)
+                    val riskInt = jsonResp.optInt("risk_level", 0)
+                    val riskLevelString = when (riskInt) {
+                        1 -> "Medium"
+                        2 -> "High"
+                        else -> "Low"
+                    }
+                    val aiJournal = jsonResp.optString(
+                        "journal",
+                        generateEnhancedJournal(tm, ta, phoneChecks, nightUsage, riskLevelString, socialMin, gamingMin)
+                    )
+
+                    if (parentId != null && childId != null) {
+                        Firebase.firestore.collection("users").document(parentId!!).collection("children").document(childId!!)
+                            .update(
+                                "usageByDate.$dk.riskLevel", riskLevelString,
+                                "usageByDate.$dk.journalText", aiJournal,
+                                "riskLevel", riskLevelString
+                            )
+                    }
+
+                    runOnUiThread {
+                        updateCurrentViewIfMatch(dk, aiJournal, riskLevelString)
+                    }
+                }
+            }
+        })
+    }
+
+    // Legacy sendRiskRequest: calls /predict (original endpoint), no journal
+    private fun sendRiskRequestLegacy(
         totalHours: Double,
         socialHours: Double,
         gamingHours: Double,
@@ -424,7 +595,7 @@ class ChildDashboardActivity : AppCompatActivity() {
         }
 
         val body = json.toString().toRequestBody("application/json".toMediaTypeOrNull())
-        val request = Request.Builder().url("http://10.0.2.2:5000/predict").post(body).build()
+        val request = Request.Builder().url("http://10.0.2.2:5000/analyze").post(body).build()
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
@@ -433,7 +604,7 @@ class ChildDashboardActivity : AppCompatActivity() {
 
             override fun onResponse(call: Call, response: Response) {
                 val responseBody = response.body?.string()
-                Log.d("API_RESPONSE", "ML response: $responseBody")
+                Log.d("API_RESPONSE", "ML /predict response: $responseBody")
 
                 if (response.isSuccessful && responseBody != null) {
                     val jsonResp = JSONObject(responseBody)
@@ -457,6 +628,35 @@ class ChildDashboardActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    private fun updateCurrentViewIfMatch(dateKey: String, journal: String, risk: String) {
+        val displayedDate = dateFormat.format(
+            Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -currentDaysOffset) }.time
+        )
+        if (displayedDate == dateKey) {
+            currentJournalText = journal
+            currentRiskLevel = risk
+            binding.riskLevelValue.text = getString(R.string.risk_level, risk)
+            updateAvatar(risk, childGender)
+        }
+    }
+
+    private fun updateAvatar(riskLevel: String, gender: String) {
+        val level = riskLevel.lowercase()
+        if (gender == "Girl") {
+            when {
+                level.contains("low") -> binding.emotionalAvatar.setImageResource(R.drawable.girl_smile)
+                level.contains("high") -> binding.emotionalAvatar.setImageResource(R.drawable.girl_sad)
+                else -> binding.emotionalAvatar.setImageResource(R.drawable.girl_mid)
+            }
+        } else {
+            when {
+                level.contains("low") -> binding.emotionalAvatar.setImageResource(R.drawable.boy_smile)
+                level.contains("high") -> binding.emotionalAvatar.setImageResource(R.drawable.boy_sad)
+                else -> binding.emotionalAvatar.setImageResource(R.drawable.boy_mid)
+            }
+        }
     }
 
     private fun setupBarChart(entries: ArrayList<BarEntry>, labels: ArrayList<String>) {

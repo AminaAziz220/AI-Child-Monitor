@@ -13,5 +13,5 @@ data = {
     "social_ratio": 0.375
 }
 
-response = requests.post("http://127.0.0.1:5000/predict", json=data)
+response = requests.post("http://127.0.0.1:5000/analyze", json=data)
 print(response.json())
