@@ -16,6 +16,7 @@ import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
 import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
+import com.github.mikephil.charting.formatter.ValueFormatter
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
 import com.sigmacoders.aichildmonitor.databinding.ActivityChildDashboardBinding
@@ -34,6 +35,21 @@ class ChildDashboardActivity : AppCompatActivity() {
     private var childId: String? = null
     private var parentId: String? = null
     private val client = OkHttpClient()
+
+    private val BASE_URL: String
+        get() {
+            val isEmulator = (android.os.Build.FINGERPRINT.startsWith("generic")
+                    || android.os.Build.FINGERPRINT.startsWith("unknown")
+                    || android.os.Build.MODEL.contains("google_sdk")
+                    || android.os.Build.MODEL.contains("Emulator")
+                    || android.os.Build.MODEL.contains("Android SDK built for x86")
+                    || android.os.Build.MANUFACTURER.contains("Genymotion")
+                    || (android.os.Build.BRAND.startsWith("generic") && android.os.Build.DEVICE.startsWith("generic"))
+                    || "google_sdk" == android.os.Build.PRODUCT
+                    || android.os.Build.HARDWARE.contains("ranchu"))
+
+            return if (isEmulator) "http://10.0.2.2:5000" else "http://172.16.30.223:5000"
+        }
     private var childGender: String = "Boy"
     private var childAge: Int = 12
     private var childName: String = "Child"
@@ -44,6 +60,20 @@ class ChildDashboardActivity : AppCompatActivity() {
     private var currentJournalText = ""
     private var currentRiskLevel = "Low"
     private val attemptedDates = mutableSetOf<String>()
+
+    private var currentJournalDialog: AlertDialog? = null
+
+    // Cached values for Journal API
+    private var lastTotalHours = 0.0
+    private var lastSocialHours = 0.0
+    private var lastGamingHours = 0.0
+    private var lastPhoneChecks = 0
+    private var lastNightUsageMinutes = 0.0
+    private var lastNightUsageRatio = 0.0
+    private var lastEntertainmentRatio = 0.0
+    private var lastGamingRatio = 0.0
+    private var lastSocialRatio = 0.0
+    private var lastDateKey = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -195,11 +225,43 @@ class ChildDashboardActivity : AppCompatActivity() {
 
         binding.journalButton.setOnClickListener {
             val title = if (currentDaysOffset == 0) "Today's Wellness Journal" else "${binding.usageDateLabel.text}'s Wellness Journal"
-            AlertDialog.Builder(this)
+
+            val hasRealJournal = currentJournalText.isNotEmpty() &&
+                    !currentJournalText.startsWith("Generating") &&
+                    !currentJournalText.startsWith("No ") &&
+                    !currentJournalText.startsWith("Analyzing")
+
+            if (!hasRealJournal && lastDateKey.isNotEmpty()) {
+                currentJournalText = "Generating your wellness journal, please wait..."
+                Toast.makeText(this@ChildDashboardActivity, "Requesting AI Journal...", Toast.LENGTH_SHORT).show()
+                val riskInt = when (currentRiskLevel) {
+                    "High" -> 2
+                    "Medium" -> 1
+                    else -> 0
+                }
+                sendJournalRequest(
+                    dateKey = lastDateKey,
+                    riskLevel = riskInt,
+                    totalHours = lastTotalHours,
+                    socialHours = lastSocialHours,
+                    gamingHours = lastGamingHours,
+                    phoneChecks = lastPhoneChecks,
+                    nightUsage = lastNightUsageMinutes,
+                    nightRatio = lastNightUsageRatio,
+                    entertainmentRatio = lastEntertainmentRatio,
+                    gamingRatio = lastGamingRatio,
+                    socialRatio = lastSocialRatio
+                )
+            }
+
+            val dialog = AlertDialog.Builder(this)
                 .setTitle(title)
                 .setMessage(currentJournalText)
                 .setPositiveButton(getString(R.string.close), null)
-                .show()
+                .create()
+
+            dialog.show()
+            currentJournalDialog = dialog
         }
     }
 
@@ -274,16 +336,35 @@ class ChildDashboardActivity : AppCompatActivity() {
 
         val dataSet = LineDataSet(entries, "Weekly Screen Time")
         dataSet.lineWidth = 3f
-        dataSet.circleRadius = 4f
-        dataSet.color = "#673AB7".toColorInt()
+        dataSet.circleRadius = 5f
         dataSet.setCircleColor("#673AB7".toColorInt())
+        dataSet.circleHoleColor = android.graphics.Color.WHITE
+        dataSet.setDrawCircleHole(true)
+        dataSet.color = "#673AB7".toColorInt()
+        dataSet.setDrawValues(true)
+        dataSet.valueTextSize = 10f
+        dataSet.valueFormatter = object : ValueFormatter() {
+            override fun getFormattedValue(value: Float): String {
+                return value.toInt().toString()
+            }
+        }
+
+        val data = LineData(dataSet)
 
         binding.weeklyTrendChart.apply {
-            this.data = LineData(dataSet)
+            this.data = data
             xAxis.valueFormatter = IndexAxisValueFormatter(labels)
             xAxis.position = XAxis.XAxisPosition.BOTTOM
+            xAxis.granularity = 1f
+            xAxis.labelCount = 7
+            xAxis.setDrawGridLines(true)
+            
+            axisLeft.axisMinimum = 0f
+            axisLeft.setDrawGridLines(true)
             axisRight.isEnabled = false
             description.isEnabled = false
+            legend.isEnabled = true
+            setTouchEnabled(true)
             invalidate()
         }
     }
@@ -358,113 +439,33 @@ class ChildDashboardActivity : AppCompatActivity() {
         val gamingRatio = if (totalHours > 0) gamingHours / totalHours else 0.0
         val socialRatio = if (totalHours > 0) socialHours / totalHours else 0.0
 
-        // Only call Flask if we don't already have a real AI journal for this date
-        val hasRealJournal = currentJournalText.isNotEmpty() &&
-                !currentJournalText.startsWith("Analyzing") &&
-                !currentJournalText.startsWith("No data")
+        // Save metrics for journal generation if requested by user
+        lastTotalHours = totalHours
+        lastSocialHours = socialHours
+        lastGamingHours = gamingHours
+        lastPhoneChecks = phoneChecks
+        lastNightUsageMinutes = nightUsageMinutes / 60.0
+        lastNightUsageRatio = nightUsageRatio
+        lastEntertainmentRatio = entertainmentRatio
+        lastGamingRatio = gamingRatio
+        lastSocialRatio = socialRatio
+        lastDateKey = dateKey
 
-        if (!hasRealJournal && !attemptedDates.contains(dateKey)) {
-            attemptedDates.add(dateKey)
-            currentJournalText = "Generating your wellness journal, please wait..."
-            // Step 1: call /predict, then on success call /journal
-            sendPredictThenJournal(
-                dateKey = dateKey,
-                totalHours = totalHours,
-                socialHours = socialHours,
-                gamingHours = gamingHours,
-                phoneChecks = phoneChecks,
-                nightUsage = nightUsageMinutes,
-                nightRatio = nightUsageRatio,
-                entertainmentRatio = entertainmentRatio,
-                gamingRatio = gamingRatio,
-                socialRatio = socialRatio
-            )
-        } else if (hasRealJournal) {
-            // Already have AI journal — just refresh risk via /predict
-            sendPredictOnly(
-                dateKey = dateKey,
-                totalHours = totalHours,
-                socialHours = socialHours,
-                gamingHours = gamingHours,
-                phoneChecks = phoneChecks,
-                nightUsage = nightUsageMinutes,
-                nightRatio = nightUsageRatio,
-                entertainmentRatio = entertainmentRatio,
-                gamingRatio = gamingRatio,
-                socialRatio = socialRatio
-            )
-        }
-    }
-
-    // Step 1: POST to /predict → get risk_level
-    // Step 2: POST to /journal with risk_level → get journal text
-    private fun sendPredictThenJournal(
-        dateKey: String,
-        totalHours: Double,
-        socialHours: Double,
-        gamingHours: Double,
-        phoneChecks: Int,
-        nightUsage: Double,
-        nightRatio: Double,
-        entertainmentRatio: Double,
-        gamingRatio: Double,
-        socialRatio: Double
-    ) {
-        val predictJson = buildUsageJson(
-            totalHours, socialHours, gamingHours, phoneChecks,
-            nightUsage, nightRatio, entertainmentRatio, gamingRatio, socialRatio
+        // Automatically predict risk on load, but wait for user click to generate Journal
+        sendPredictOnly(
+            dateKey = dateKey,
+            totalHours = totalHours,
+            socialHours = socialHours,
+            gamingHours = gamingHours,
+            phoneChecks = phoneChecks,
+            nightUsage = nightUsageMinutes / 60.0,
+            nightRatio = nightUsageRatio,
+            entertainmentRatio = entertainmentRatio,
+            gamingRatio = gamingRatio,
+            socialRatio = socialRatio
         )
-
-        val predictRequest = Request.Builder()
-            .url("http://10.0.2.2:5000/predict")
-            .post(predictJson.toString().toRequestBody("application/json".toMediaTypeOrNull()))
-            .build()
-
-        client.newCall(predictRequest).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                Log.e("API_ERROR", "Failed to connect to /predict: ${e.message}")
-                runOnUiThread {
-                    currentJournalText = getString(R.string.no_journal_entry)
-                    binding.riskLevelValue.text = getString(R.string.risk_level, "Unavailable")
-                }
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                val body = response.body?.string()
-                Log.d("API_RESPONSE", "/predict response: $body")
-
-                if (response.isSuccessful && body != null) {
-                    val riskInt = JSONObject(body).optInt("risk_level", 0)
-                    val riskLevelString = when (riskInt) {
-                        1 -> "Medium"
-                        2 -> "High"
-                        else -> "Low"
-                    }
-
-                    // Save risk level immediately
-                    saveToFirestore(dateKey, riskLevelString, null)
-                    runOnUiThread {
-                        updateCurrentViewIfMatch(dateKey, currentJournalText, riskLevelString)
-                    }
-
-                    // Step 2: call /journal with risk_level included
-                    sendJournalRequest(
-                        dateKey = dateKey,
-                        riskLevel = riskInt,
-                        totalHours = totalHours,
-                        socialHours = socialHours,
-                        gamingHours = gamingHours,
-                        phoneChecks = phoneChecks,
-                        nightUsage = nightUsage,
-                        nightRatio = nightRatio,
-                        entertainmentRatio = entertainmentRatio,
-                        gamingRatio = gamingRatio,
-                        socialRatio = socialRatio
-                    )
-                }
-            }
-        })
     }
+
 
     // POST to /journal → get AI journal text
     private fun sendJournalRequest(
@@ -488,7 +489,7 @@ class ChildDashboardActivity : AppCompatActivity() {
         }
 
         val journalRequest = Request.Builder()
-            .url("http://10.0.2.2:5000/journal")
+            .url("$BASE_URL/journal")
             .post(journalJson.toString().toRequestBody("application/json".toMediaTypeOrNull()))
             .build()
 
@@ -497,6 +498,7 @@ class ChildDashboardActivity : AppCompatActivity() {
                 Log.e("API_ERROR", "Failed to connect to /journal: ${e.message}")
                 runOnUiThread {
                     currentJournalText = getString(R.string.no_journal_entry)
+                    currentJournalDialog?.setMessage(currentJournalText)
                 }
             }
 
@@ -515,6 +517,12 @@ class ChildDashboardActivity : AppCompatActivity() {
                     saveToFirestore(dateKey, riskString, aiJournal)
                     runOnUiThread {
                         updateCurrentViewIfMatch(dateKey, aiJournal, riskString)
+                        currentJournalDialog?.setMessage(aiJournal)
+                    }
+                } else {
+                    runOnUiThread {
+                        currentJournalText = "Failed to generate journal. Server returned error."
+                        currentJournalDialog?.setMessage(currentJournalText)
                     }
                 }
             }
@@ -540,7 +548,7 @@ class ChildDashboardActivity : AppCompatActivity() {
         )
 
         val request = Request.Builder()
-            .url("http://10.0.2.2:5000/predict")
+            .url("$BASE_URL/predict")
             .post(json.toString().toRequestBody("application/json".toMediaTypeOrNull()))
             .build()
 

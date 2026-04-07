@@ -33,9 +33,8 @@ class ChildHomeActivity : AppCompatActivity() {
 
         Log.d(tag, "Parent=$parentId Child=$childId")
 
-        binding.grantPermissionButton.setOnClickListener {
-            requestUsageStatsPermission()
-        }
+        // Button click listener is now dynamically handled in updateUiAndScheduleWork
+
     }
 
     override fun onResume() {
@@ -46,7 +45,18 @@ class ChildHomeActivity : AppCompatActivity() {
     private fun updateUiAndScheduleWork() {
 
         if (!hasUsageStatsPermission()) {
-            showPermissionNeededState()
+            showPermissionNeededState(
+                "This app needs permission to access usage stats to report screen time to your parent.",
+                View.OnClickListener { requestUsageStatsPermission() }
+            )
+            return
+        }
+
+        if (!hasAccessibilityPermission()) {
+            showPermissionNeededState(
+                "Please enable the AI Child Monitor Accessibility Service so we can monitor YouTube usage.",
+                View.OnClickListener { requestAccessibilityPermission() }
+            )
             return
         }
 
@@ -89,6 +99,33 @@ class ChildHomeActivity : AppCompatActivity() {
         startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
     }
 
+    private fun hasAccessibilityPermission(): Boolean {
+        var accessibilityEnabled = 0
+        try {
+            accessibilityEnabled = Settings.Secure.getInt(
+                contentResolver,
+                Settings.Secure.ACCESSIBILITY_ENABLED
+            )
+        } catch (e: Settings.SettingNotFoundException) {
+            e.printStackTrace()
+        }
+        val service = packageName + "/" + com.sigmacoders.aichildmonitor.YouTubeAccessibilityService::class.java.canonicalName
+        if (accessibilityEnabled == 1) {
+            val settingValue = Settings.Secure.getString(
+                contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            )
+            if (settingValue != null) {
+                return settingValue.contains(service) || settingValue.contains(packageName)
+            }
+        }
+        return false
+    }
+
+    private fun requestAccessibilityPermission() {
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+    }
+
     private fun showGrantedState() {
         binding.welcomeTextView.visibility = View.VISIBLE
         binding.statusTextView.visibility = View.VISIBLE
@@ -96,11 +133,14 @@ class ChildHomeActivity : AppCompatActivity() {
         binding.grantPermissionButton.visibility = View.GONE
     }
 
-    private fun showPermissionNeededState() {
+    private fun showPermissionNeededState(message: String, onClickListener: View.OnClickListener) {
         binding.welcomeTextView.visibility = View.GONE
         binding.statusTextView.visibility = View.GONE
         binding.permissionTextView.visibility = View.VISIBLE
         binding.grantPermissionButton.visibility = View.VISIBLE
+
+        binding.permissionTextView.text = message
+        binding.grantPermissionButton.setOnClickListener(onClickListener)
     }
 
     private fun scheduleUsageStatsUpload(parentId: String, childId: String) {

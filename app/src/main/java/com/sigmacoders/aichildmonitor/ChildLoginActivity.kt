@@ -30,22 +30,20 @@ class ChildLoginActivity : AppCompatActivity() {
         binding.pairButton.text = "Authenticating..."
 
         if (Firebase.auth.currentUser == null) {
-            Firebase.auth.signInAnonymously()
-                .addOnSuccessListener {
-                    Log.d(tag, "Anonymous sign-in successful.")
-                    binding.pairButton.isEnabled = true
-                    binding.pairButton.text = "Pair Device"
-                }
-                .addOnFailureListener { e ->
-                    Log.e(tag, "Anonymous sign-in failed.", e)
-                    Toast.makeText(this, "Authentication failed. Check connection.", Toast.LENGTH_LONG).show()
-                }
+            authenticateAnonymously()
         } else {
             binding.pairButton.isEnabled = true
             binding.pairButton.text = "Pair Device"
         }
 
         binding.pairButton.setOnClickListener {
+            if (Firebase.auth.currentUser == null) {
+                binding.pairButton.isEnabled = false
+                binding.pairButton.text = "Authenticating..."
+                authenticateAnonymously()
+                return@setOnClickListener
+            }
+
             val pairingKey = binding.pairingKeyEditText.text.toString().trim()
             if (pairingKey.length == 4) {
                 pairDevice(pairingKey)
@@ -53,6 +51,26 @@ class ChildLoginActivity : AppCompatActivity() {
                 Toast.makeText(this, "Please enter a valid 4-digit key", Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    private fun authenticateAnonymously() {
+        Firebase.auth.signInAnonymously()
+            .addOnSuccessListener {
+                Log.d(tag, "Anonymous sign-in successful.")
+                binding.pairButton.isEnabled = true
+                binding.pairButton.text = "Pair Device"
+            }
+            .addOnFailureListener { e ->
+                Log.e(tag, "Anonymous sign-in failed.", e)
+                binding.pairButton.isEnabled = true
+                binding.pairButton.text = "Retry Auth"
+                val errorMsg = if (e.message?.contains("disabled") == true || e.message?.contains("configuration") == true) {
+                    "Enable Anonymous Sign-In in Firebase Console!"
+                } else {
+                    "Authentication failed. Check connection."
+                }
+                Toast.makeText(this, errorMsg, Toast.LENGTH_LONG).show()
+            }
     }
 
     private fun pairDevice(pairingKey: String) {
@@ -128,7 +146,7 @@ class ChildLoginActivity : AppCompatActivity() {
             .add(childData)
             .addOnSuccessListener { childDocRef ->
                 pairingKeyRef.delete()
-                
+
                 // Store IDs locally for the background service
                 val prefs = getSharedPreferences("AI_CHILD_MONITOR_PREFS", Context.MODE_PRIVATE).edit()
                 prefs.putString("PARENT_ID", parentId)
